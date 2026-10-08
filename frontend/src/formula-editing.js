@@ -1,3 +1,5 @@
+import { sourceLines } from './source-lines.js';
+
 function isEscaped(source, index) {
   let slashes = 0;
   for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor--) slashes += 1;
@@ -5,10 +7,17 @@ function isEscaped(source, index) {
 }
 
 function maskFencedCode(source) {
-  const masked = [...source];
+  // Keep UTF-16 offsets without allocating one array entry per character in
+  // a large document. Copy unmasked runs and replace only code ranges.
+  const parts = [];
+  let copiedUntil = 0;
+  const mask = (from, to) => {
+    parts.push(source.slice(copiedUntil, from), ' '.repeat(to - from));
+    copiedUntil = to;
+  };
   let offset = 0;
   let fence = null;
-  for (const lineWithBreak of source.match(/.*(?:\n|$)/g) || []) {
+  for (const lineWithBreak of sourceLines(source)) {
     if (!lineWithBreak) continue;
     const line = lineWithBreak.replace(/\n$/, '');
     const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
@@ -16,7 +25,7 @@ function maskFencedCode(source) {
     if (!fence && marker) fence = { char: marker[1][0], length: marker[1].length };
     const insideFence = Boolean(fence);
     if (insideFence) {
-      for (let index = offset; index < offset + line.length; index++) masked[index] = ' ';
+      mask(offset, offset + line.length);
     } else {
       let cursor = 0;
       while (cursor < line.length) {
@@ -26,7 +35,7 @@ function maskFencedCode(source) {
         const markerText = opening[0];
         const close = line.indexOf(markerText, start + markerText.length);
         if (close < 0) break;
-        for (let index = offset + start; index < offset + close + markerText.length; index++) masked[index] = ' ';
+        mask(offset + start, offset + close + markerText.length);
         cursor = close + markerText.length;
       }
     }
@@ -35,7 +44,8 @@ function maskFencedCode(source) {
     }
     offset += lineWithBreak.length;
   }
-  return masked.join('');
+  parts.push(source.slice(copiedUntil));
+  return parts.join('');
 }
 
 function lineEnd(source, from) {

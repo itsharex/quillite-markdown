@@ -6,14 +6,89 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 )
+
+func TestDOCXImageRowsInsideListsPreserveOrderAndIndent(t *testing.T) {
+	var pixels bytes.Buffer
+	if err := png.Encode(&pixels, image.NewRGBA(image.Rect(0, 0, 1200, 600))); err != nil {
+		t.Fatal(err)
+	}
+	src := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pixels.Bytes())
+	row := `<table class="quillite-image-row"><tbody><tr><td><img src="` + src + `"></td><td><img src="` + src + `"></td></tr></tbody></table>`
+	for _, tag := range []string{"ul", "ol"} {
+		fragment := "<" + tag + "><li><p>Before row</p>" + row + "<p>After row</p><ul><li>Nested</li></ul><p>After nested</p></li></" + tag + ">"
+		data, err := buildDOCX(fragment, "Audit", t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		document := string(readDOCXFiles(t, data)["word/document.xml"])
+		if strings.Count(document, "<w:tbl>") != 1 || strings.Count(document, "<wp:inline") != 2 {
+			t.Fatal("nested image row flattened")
+		}
+		if !strings.Contains(document, `<w:tblInd w:w="720"`) {
+			t.Fatal("missing list table indent")
+		}
+		if strings.Count(document, "<w:numPr>") != 2 {
+			t.Fatal("list markers duplicated or lost")
+		}
+		if !(strings.Index(document, "Before row") < strings.Index(document, "<w:tbl>") && strings.Index(document, "</w:tbl>") < strings.Index(document, "After row") && strings.Index(document, "Nested") < strings.Index(document, "After nested")) {
+			t.Fatal("list content reordered")
+		}
+	}
+}
+
+func TestDOCXImageRowsFitEveryCellWithoutHeaderOrBorders(t *testing.T) {
+	var pngData bytes.Buffer
+	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 1400, 700))); err != nil {
+		t.Fatal(err)
+	}
+	src := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngData.Bytes())
+	for _, count := range []int{2, 3, 6} {
+		fragment := `<table class="quillite-image-row"><tbody><tr>`
+		for i := 0; i < count; i++ {
+			fragment += fmt.Sprintf(`<td><img src="%s" alt="Image %d" style="display:block;margin-left:0;margin-right:auto"></td>`, src, i)
+		}
+		fragment += `</tr></tbody></table>`
+		data, err := buildDOCX(fragment, "Rows", t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := readDOCXFiles(t, data)
+		document := string(files["word/document.xml"])
+		if strings.Count(document, "<w:tc>") != count || strings.Count(document, "<w:tr>") != 1 || strings.Count(document, "<wp:inline") != count {
+			t.Fatalf("wrong row structure: %s", document)
+		}
+		if strings.Contains(document, "tblHeader") || strings.Contains(document, "<w:shd") || strings.Contains(document, `w:val="single"`) {
+			t.Fatal("image row gained table styling")
+		}
+		for _, match := range regexp.MustCompile(`<wp:extent cx="(\d+)" cy="(\d+)"`).FindAllStringSubmatch(document, -1) {
+			width, _ := strconv.Atoi(match[1])
+			height, _ := strconv.Atoi(match[2])
+			if width > (9398/count-280)*635 || width-height*2 < 0 || width-height*2 > 1 {
+				t.Fatalf("image does not fit / changed aspect: %d x %d", width, height)
+			}
+		}
+		assertWellFormedXML(t, []byte(document))
+	}
+	// A spoofed row class must not cause captions or cell text to disappear.
+	data, err := buildDOCX(`<table class="quillite-image-row"><tbody><tr><td>KEEP <img src="`+src+`"></td><td>SECOND</td></tr></tbody></table>`, "Text", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document := string(readDOCXFiles(t, data)["word/document.xml"]); !strings.Contains(document, "KEEP") || !strings.Contains(document, "SECOND") {
+		t.Fatal("table text lost")
+	}
+}
 
 func TestRenderedExportLimitAllowsSupportedLargeDocumentsToExpand(t *testing.T) {
 	if maxRenderedExportHTMLSize != 96*1024*1024 {
@@ -33,6 +108,72 @@ func TestRenderedExportLimitAllowsSupportedLargeDocumentsToExpand(t *testing.T) 
 	}
 	if err := validateRenderedExportHTMLSize(maxRenderedExportHTMLSize + 1); err == nil || !strings.Contains(err.Error(), exportTooLargeErrorMarker) {
 		t.Fatalf("oversized rendered export did not return the stable marker: %v", err)
+	}
+}
+
+func TestDOCXImageAlignmentKeepsAdjacentProseSeparate(t *testing.T) {
+	var pngData bytes.Buffer
+	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	source := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngData.Bytes())
+	for _, alignment := range []string{"left", "center", "right"} {
+		t.Run(alignment, func(t *testing.T) {
+			left, right := "auto", "auto"
+			if alignment == "left" {
+				left = "0"
+			}
+			if alignment == "right" {
+				right = "0"
+			}
+			rendered := `<p>Before<img src="` + source + `" style="display:block;margin-left:` + left + `;margin-right:` + right + `">After</p>`
+			data, err := buildDOCX(rendered, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := readDOCXFiles(t, data)
+			document := string(files["word/document.xml"])
+			if !strings.Contains(document, `<w:jc w:val="`+alignment+`"/>`) {
+				t.Fatalf("missing alignment: %s", document)
+			}
+			before, drawing, after := strings.Index(document, ">Before<"), strings.Index(document, "<w:drawing>"), strings.Index(document, ">After<")
+			if before < 0 || drawing <= before || after <= drawing {
+				t.Fatal("prose/image order changed")
+			}
+			if strings.Count(document, "<w:p>") != 3 {
+				t.Fatalf("expected three separate paragraphs: %s", document)
+			}
+			if !bytes.Equal(files["word/media/image1.png"], pngData.Bytes()) {
+				t.Fatal("image data was changed")
+			}
+			assertWellFormedXML(t, files["word/document.xml"])
+		})
+	}
+	if got := docxImageAlignment(`display:block;margin-left:auto;margin-right:malicious"/>`); got != "" {
+		t.Fatalf("unexpected arbitrary alignment: %q", got)
+	}
+}
+
+func TestDOCXAlignedImageInListsAndTables(t *testing.T) {
+	var pngData bytes.Buffer
+	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	img := `<img src="data:image/png;base64,` + base64.StdEncoding.EncodeToString(pngData.Bytes()) + `" style="display:block;margin-left:auto;margin-right:0">`
+	for _, rendered := range []string{`<ul><li>` + img + `After</li><li>Next</li></ul>`, `<ul><li>Before` + img + `After</li><li>Next</li></ul>`, `<table><tr><td>Before` + img + `After</td></tr></table>`} {
+		data, err := buildDOCX(rendered, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := readDOCXFiles(t, data)
+		document := string(files["word/document.xml"])
+		if strings.Count(document, `<w:jc w:val="right"/>`) != 1 {
+			t.Fatal("image alignment lost or applied to prose")
+		}
+		if strings.HasPrefix(rendered, "<ul>") && strings.Count(document, "<w:numPr>") != 2 {
+			t.Fatal("image split duplicated list bullets")
+		}
+		assertWellFormedXML(t, files["word/document.xml"])
 	}
 }
 

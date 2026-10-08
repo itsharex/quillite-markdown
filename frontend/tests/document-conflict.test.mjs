@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import { isMissingDocumentError } from '../src/library-state.js';
 
 const source = readFileSync(new URL('../src/renderer.js', import.meta.url), 'utf8');
 const conflictSource = source.slice(source.indexOf('function resetDocumentConflict('), source.indexOf('function exportPreviewContainer('));
@@ -41,9 +42,9 @@ function harness() {
     setDirty: value => { state.dirty = value; }, t: key => key, showToast: key => calls.push(['toast', key]),
     clearRecoverySnapshot: async () => {}, cancelScheduledRecoverySnapshot() {},
     scheduleRecoverySnapshot: () => calls.push(['backup']),
-    syncDocumentAccessControls() {}, addRecentDocument() {}, renderFileList() {},
+    syncDocumentAccessControls() {}, syncDocumentIdentity() {}, addRecentDocument() {}, renderFileList() {},
     refreshLibraryAfterReplacement: async () => {}, pathIsInsideRoot: () => false,
-    reportSilentError() {}, console: { error() {} }, setTimeout() {}, clearTimeout() {},
+    reportSilentError() {}, isMissingDocumentError, console: { error() {} }, setTimeout() {}, clearTimeout() {},
   });
   vm.runInContext(conflictSource, context);
   return { context, state, calls, $, api };

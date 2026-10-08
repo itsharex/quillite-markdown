@@ -35,11 +35,50 @@ type appErrorEvent struct {
 	AppVersion string `json:"appVersion"`
 }
 
-var windowsPathPattern = regexp.MustCompile(`(?i)\b[A-Z]:[\\/][^\s\r\n"']+`)
-var unixPathPattern = regexp.MustCompile(`(^|[\s"'(])/(?:[^\s\r\n"'()]+)`)
 var userFileNamePattern = regexp.MustCompile(`(?i)(^|[\s"'(])[^\\/\s"'():]+\.(?:md|markdown|txt|png|jpe?g|gif|webp|svg|pdf|docx?)([\s"'():,;]|$)`)
 var labeledSecretPattern = regexp.MustCompile(`(?i)\b((?:x[ _-]?)?api[ _-]?key|key|access[ _-]?(?:key|token)|client[ _-]?secret|refresh[ _-]?token|id[ _-]?token|auth[ _-]?token|authorization|bearer|token|secret|password)\b(["']?\s*(?::|=|%3d)\s*["']?\s*)(?:bearer\s+)?[^\s&;,<>"']{6,}`)
 var commonSecretPattern = regexp.MustCompile(`(?i)\b(?:sk-[A-Za-z0-9_-]{6,}|github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|AIza[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b`)
+
+// Arbitrary filenames can contain spaces, quotes and colons. There is no safe
+// way to infer the end of an unquoted path in a free-form error. Hide its entire
+// line tail, then retain ONLY a fixed, recognized diagnostic category.
+var privatePathStartPattern = regexp.MustCompile(`(?i)(?:\[用户目录\]|\b[A-Z]:[\\/]|\\\\|file://|(?:^|[\s"'(])/[^ \t\r\n])`)
+var safePathDiagnosticCauses = []struct {
+	pattern *regexp.Regexp
+	label   string
+}{
+	{regexp.MustCompile(`(?i)access is denied|permission denied|拒绝访问|权限不足`), "Access is denied."},
+	{regexp.MustCompile(`(?i)operation not permitted|不允许的操作`), "Operation not permitted."},
+	{regexp.MustCompile(`(?i)cloud provider is not running|云文件提供程序未运行`), "The cloud provider is not running."},
+	{regexp.MustCompile(`(?i)incompatible hardlinks|不兼容的硬链接`), "Cloud files do not support this hard-link operation."},
+	{regexp.MustCompile(`(?i)sharing violation|used by another process|being used by another process|共享冲突|另一个进程正在使用`), "The file is in use."},
+	{regexp.MustCompile(`(?i)no space left|disk (?:is )?full|磁盘空间不足`), "Insufficient disk space."},
+	{regexp.MustCompile(`(?i)read.only file system|只读文件系统`), "The file system is read-only."},
+	{regexp.MustCompile(`(?i)no such file|cannot find the (?:file|path)|file (?:does not|doesn't|doesn’t) exist|系统找不到|文件不存在`), "The file does not exist."},
+	{regexp.MustCompile(`(?i)original restored`), "The original file was restored."},
+	{regexp.MustCompile(`(?i)recovery retained|prepared recovery file remains`), "Recovery material was retained."},
+}
+
+func redactDiagnosticPaths(value string) string {
+	lines := strings.Split(value, "\n")
+	for index, line := range lines {
+		match := privatePathStartPattern.FindStringIndex(line)
+		if match == nil {
+			continue
+		}
+		var causes []string
+		for _, cause := range safePathDiagnosticCauses {
+			if cause.pattern.MatchString(line) {
+				causes = append(causes, cause.label)
+			}
+		}
+		lines[index] = strings.TrimRight(line[:match[0]], " \t\"'(") + " [路径]"
+		if len(causes) > 0 {
+			lines[index] += ": " + strings.Join(causes, " ")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 func newTelemetryEventID() (string, error) {
 	random := make([]byte, 16)
@@ -280,8 +319,7 @@ func sanitizeErrorText(value string, limit int) string {
 			value = strings.ReplaceAll(value, candidate, "[用户目录]")
 		}
 	}
-	value = windowsPathPattern.ReplaceAllString(value, "[路径]")
-	value = unixPathPattern.ReplaceAllString(value, "$1[路径]")
+	value = redactDiagnosticPaths(value)
 	value = userFileNamePattern.ReplaceAllString(value, "$1[文件名]$2")
 	// Provider and network errors are untrusted text. Remove credentials even
 	// when a caller accidentally forwards an authentication failure.

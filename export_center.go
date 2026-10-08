@@ -97,7 +97,7 @@ func defaultExportSettings() ExportSettings {
 func normaliseExportFormat(format string) string {
 	format = strings.ToLower(strings.TrimSpace(format))
 	switch format {
-	case "docx", "html", "html-plain", "pdf", "png", "jpeg", "epub", "rtf", "odt", "latex", "mediawiki", "custom":
+	case "docx", "html", "html-plain", "markdown-portable", "pdf", "png", "jpeg", "epub", "rtf", "odt", "latex", "mediawiki", "custom":
 		return format
 	default:
 		return "html"

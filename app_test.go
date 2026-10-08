@@ -1736,6 +1736,47 @@ func TestLanguagePersistenceAndArgumentDetection(t *testing.T) {
 	}
 }
 
+func TestBodyTypographyPersistenceAndValidation(t *testing.T) {
+	app := testApp(t)
+	defaults := BodyTypography{"follow", "follow", "standard"}
+	prefs, err := app.GetPreferences()
+	if err != nil || prefs.BodyTypography != defaults {
+		t.Fatalf("legacy defaults: %#v, %v", prefs.BodyTypography, err)
+	}
+	input := BodyTypography{" SONGTI ", " GEORGIA ", " LARGE "}
+	expected := BodyTypography{"songti", "georgia", "large"}
+	saved, err := app.SetBodyTypography(input)
+	if err != nil || saved != expected {
+		t.Fatalf("save: %#v, %v", saved, err)
+	}
+	prefs, err = app.GetPreferences()
+	if err != nil || prefs.BodyTypography != expected || prefs.FontFamily != "system" {
+		t.Fatalf("separate font preferences: %#v, %v", prefs, err)
+	}
+	if _, err = app.SetFontFamily("kaiti"); err != nil {
+		t.Fatal(err)
+	}
+	prefs, err = app.GetPreferences()
+	if err != nil || prefs.BodyTypography != expected {
+		t.Fatalf("app font cannot replace body preferences: %#v, %v", prefs.BodyTypography, err)
+	}
+	invalid := BodyTypography{"url(https://example.com)", "C:\\other.ttf", "999"}
+	saved, err = app.SetBodyTypography(invalid)
+	if err != nil || saved != defaults {
+		t.Fatalf("invalid presets: %#v, %v", saved, err)
+	}
+	for _, chinese := range []string{"follow", "sans", "songti", "kaiti", "rounded", "mono"} {
+		for _, english := range []string{"follow", "arial", "georgia", "times", "verdana", "mono"} {
+			for _, formula := range []string{"small", "standard", "large"} {
+				value := BodyTypography{chinese, english, formula}
+				if normaliseBodyTypography(value) != value {
+					t.Fatalf("valid combination rejected: %#v", value)
+				}
+			}
+		}
+	}
+}
+
 func TestFontFamilyPersistenceAndValidation(t *testing.T) {
 	app := testApp(t)
 	prefs, err := app.GetPreferences()

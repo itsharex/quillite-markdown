@@ -112,8 +112,9 @@ export const highlightExtension = {
 };
 
 export function nextFootnoteNumber(source) {
-  const numbers = [...String(source).matchAll(/\[\^(\d+)\]/g)].map(match => Number(match[1]));
-  return numbers.length ? Math.max(...numbers) + 1 : 1;
+  let maximum = 0;
+  for (const match of String(source).matchAll(/\[\^(\d+)\]/g)) maximum = Math.max(maximum, Number(match[1]));
+  return maximum + 1;
 }
 
 export function escapeMarkdownText(value) {

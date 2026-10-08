@@ -285,7 +285,8 @@
           <div class="editor-header">
             <div>
               <span class="eyebrow" data-i18n="markdownEditorLabel">MARKDOWN 编辑器</span>
-              <strong id="editorFileName">未命名文档</strong>
+              <button id="renameDocumentButton" class="document-name-button" type="button" data-i18n-title="renameDocument" title="修改文件名"><strong id="editorFileName">未命名文档</strong><span aria-hidden="true">✎</span></button>
+              <button id="editorDocumentLocation" class="document-location-button" type="button" data-i18n-title="revealFileTitle" title="打开所在文件夹"></button>
             </div>
             <div class="editor-status">
               <span id="editorSaveState">已保存</span>
@@ -441,6 +442,8 @@
         <button type="button" role="menuitemradio" data-font-family="rounded" aria-checked="false"><span data-i18n="fontRounded">圆体</span><span class="settings-option-check">✓</span></button>
         <button type="button" role="menuitemradio" data-font-family="songti" aria-checked="false"><span data-i18n="fontSongti">宋体</span><span class="settings-option-check">✓</span></button>
         <button type="button" role="menuitemradio" data-font-family="kaiti" aria-checked="false"><span data-i18n="fontKaiti">楷体</span><span class="settings-option-check">✓</span></button>
+        <hr>
+        <button type="button" role="menuitem" data-action="body-typography"><span data-i18n="bodyTypography">正文与公式设置</span></button>
       </div>
     </div>
     <hr>
@@ -506,11 +509,11 @@
     <button data-action="document-tools"><span class="menu-label" data-i18n="documentTools">文档工具</span></button>
     <button data-action="print"><span class="menu-label" data-i18n="printDocument">打印文档</span> <span>Ctrl P</span></button>
     <hr>
-    <button data-action="image-upload-settings"><span class="menu-label" data-i18n="imageUploadSettings">图床设置</span> <span>PicGo</span></button>
+    <button data-action="image-upload-settings"><span class="menu-label" data-i18n="imageUploadSettings">图片存储与图床</span> <span data-i18n="imageStorageLabel">本地 / 内嵌 / 图床</span></button>
     <button data-action="ai-settings"><span class="menu-label" data-i18n="aiAssistant">AI 助手</span> <span data-i18n="aiSettingsHint">多模型</span></button>
     <button data-action="feedback"><span class="menu-label" data-i18n="feedback">意见反馈</span> <span data-i18n="feedbackShortHint">建议与异常</span></button>
     <button data-action="check-update"><span class="menu-label" data-i18n="checkForUpdates">检查更新</span></button>
-    <button data-action="about"><span class="menu-label" data-i18n="about">关于</span> <span>2.7.5</span></button>
+    <button data-action="about"><span class="menu-label" data-i18n="about">关于</span> <span>2.7.6</span></button>
   </div>
 
   <div id="codeLangMenu" class="popover code-lang-menu hidden no-drag" role="menu" aria-labelledby="codeLangMenuLabel">
@@ -668,6 +671,40 @@
     </section>
   </div>
 
+  <dialog id="typographyDialog" class="typography-dialog no-drag" aria-labelledby="typographyTitle" aria-describedby="typographyHint">
+    <button id="closeTypography" class="about-close" type="button" data-i18n-aria-label="close" aria-label="关闭"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    <h2 id="typographyTitle" data-i18n="bodyTypography">正文与公式设置</h2>
+    <p id="typographyHint" class="typography-hint" data-i18n="typographyHint">切换后直接预览当前文档；保存后记忆，取消恢复原设置。左右正文同步，界面与代码不变。</p>
+    <div class="typography-fields">
+      <label for="bodyStyle"><span data-i18n="bodyStyle">正文风格</span><select id="bodyStyle">
+        <option value="default" data-i18n="bodyStyleDefault">默认（跟随软件）</option>
+        <option value="modern" data-i18n="bodyStyleModern">现代简洁</option>
+        <option value="clear" data-i18n="bodyStyleClear">清晰易读</option>
+        <option value="book" data-i18n="bodyStyleBook">书籍阅读</option>
+        <option value="classic" data-i18n="bodyStyleClassic">经典文档</option>
+        <option value="literary" data-i18n="bodyStyleLiterary">文艺随笔</option>
+        <option value="handwritten" data-i18n="bodyStyleHandwritten">手写气息</option>
+        <option value="gentle" data-i18n="bodyStyleGentle">柔和圆润</option>
+        <option value="magazine" data-i18n="bodyStyleMagazine">杂志风格</option>
+        <option value="technical" data-i18n="bodyStyleTechnical">技术文档</option>
+        <option value="mono" data-i18n="bodyStyleMono">等宽正文</option>
+        <option id="bodyStyleLegacy" value="legacy" data-i18n="bodyStyleLegacy" hidden>原有自定义搭配</option>
+      </select></label>
+      <label for="bodyFormulaSize"><span data-i18n="formulaTextSize">公式字号</span><select id="bodyFormulaSize">
+        <option value="small" data-i18n="formulaSizeSmall">小</option>
+        <option value="standard" data-i18n="formulaSizeStandard">标准</option>
+        <option value="large" data-i18n="formulaSizeLarge">大</option>
+      </select></label>
+    </div>
+    <p class="typography-hint" data-i18n="typographyFallbackHint">使用本机字体，未安装时自动回退；公式保留 KaTeX 数学字体，仅调整大小。</p>
+    <p id="typographySaveError" class="typography-error" role="alert"></p>
+    <div class="typography-actions">
+      <button id="resetTypography" class="large-button secondary" type="button" data-i18n="typographyReset">恢复默认</button>
+      <button id="cancelTypography" class="large-button secondary" type="button" data-i18n="cancel">取消</button>
+      <button id="saveTypography" class="large-button primary" type="button" data-i18n="saveSettings">保存设置</button>
+    </div>
+  </dialog>
+
   <div id="aboutDialog" class="dialog-backdrop hidden no-drag" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
     <section class="about-dialog">
       <button id="closeAbout" class="about-close" type="button" data-i18n-title="close" data-i18n-aria-label="close" title="关闭" aria-label="关闭">
@@ -678,7 +715,7 @@
         <div>
           <span class="eyebrow" data-i18n="aboutProductLabel">MARKDOWN 阅读与编辑器</span>
           <h2 id="aboutTitle" data-i18n="appName">轻阅 Markdown</h2>
-          <span class="about-version" data-i18n="aboutVersion">版本 2.7.5</span>
+          <span class="about-version" data-i18n="aboutVersion">版本 2.7.6</span>
         </div>
       </div>
       <p class="about-description" data-i18n="aboutDescription">一款专注、美观、跨平台的 Markdown 阅读与编辑工具，支持实时预览、语法高亮、目录导航、最近阅读和文档收藏。</p>
@@ -911,7 +948,7 @@
           <button id="selectFeedbackImages" class="large-button secondary" type="button" data-i18n="selectImages">选择图片</button>
         </div>
         <div id="feedbackImageList" class="feedback-image-list"></div>
-        <div class="feedback-system-info"><span><small data-i18n="softwareVersion">软件版本</small><strong id="feedbackAppVersion">2.7.5</strong></span><span><small data-i18n="systemVersion">系统版本</small><strong id="feedbackSystemVersion">—</strong></span></div>
+        <div class="feedback-system-info"><span><small data-i18n="softwareVersion">软件版本</small><strong id="feedbackAppVersion">2.7.6</strong></span><span><small data-i18n="systemVersion">系统版本</small><strong id="feedbackSystemVersion">—</strong></span></div>
         <p class="feedback-privacy" data-i18n="feedbackPrivacy">提交后，以上反馈内容、联系方式、所选图片及版本信息将发送到轻阅官网服务器；服务器会记录请求 IP 并解析所在城市，不会上传当前文档。</p>
         <p id="feedbackMessageStatus" class="feedback-status" role="status"></p>
         <div class="feedback-actions"><button id="cancelFeedback" class="large-button secondary" type="button" data-i18n="cancel">取消</button><button id="submitFeedback" class="large-button primary" type="submit" data-i18n="submitFeedback">提交反馈</button></div>
@@ -933,9 +970,9 @@
         </div>
       </div>
       <div class="update-versions" aria-label="Version change">
-        <span><small data-i18n="currentVersion">当前版本</small><strong id="currentVersion">2.7.5</strong></span>
+        <span><small data-i18n="currentVersion">当前版本</small><strong id="currentVersion">2.7.6</strong></span>
         <svg viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
-        <span class="latest"><small data-i18n="latestVersion">最新版本</small><strong id="latestVersion">2.7.5</strong></span>
+        <span class="latest"><small data-i18n="latestVersion">最新版本</small><strong id="latestVersion">2.7.6</strong></span>
       </div>
       <div class="release-notes-panel">
         <strong data-i18n="releaseNotes">更新说明</strong>
@@ -1002,6 +1039,7 @@
               <strong class="export-format-category-title" data-i18n="exportCategoryDocument">文档</strong>
               <div class="export-format-grid">
                 <button type="button" class="active" role="radio" aria-checked="true" data-export-format="docx"><b>DOCX</b><span data-i18n="exportFormatWord">Word 文档</span></button>
+                <button type="button" role="radio" aria-checked="false" data-export-format="markdown-portable"><b>MD</b><span data-i18n="exportFormatPortable">便携 Markdown</span></button>
                 <button type="button" role="radio" aria-checked="false" data-export-format="pdf"><b>PDF</b><span data-i18n="exportFormatPDF">系统打印</span></button>
               </div>
             </section>
@@ -1174,17 +1212,28 @@
     </section>
   </div>
 
+  <div id="renameDocumentDialog" class="dialog-backdrop hidden no-drag" role="dialog" aria-modal="true" aria-labelledby="renameDocumentTitle">
+    <section class="rename-document-dialog">
+      <h2 id="renameDocumentTitle" data-i18n="renameDocument">修改文件名</h2>
+      <p data-i18n="renameDocumentHint">仅修改文件名，不修改正文标题。不会覆盖同名文件；取消不影响文档。</p>
+      <label><span data-i18n="documentFileName">文件名（包含扩展名）</span><input id="renameDocumentName" type="text" maxlength="200" autocomplete="off"></label>
+      <p id="renameDocumentStatus" role="status" aria-live="polite"></p>
+      <div class="rename-document-actions"><button id="cancelRenameDocument" class="large-button secondary" type="button" data-i18n="cancel">取消</button><button id="confirmRenameDocument" class="large-button primary" type="button" data-i18n="renameDocument">修改文件名</button></div>
+    </section>
+  </div>
+
   <div id="imageUploadSettingsDialog" class="dialog-backdrop hidden no-drag" role="dialog" aria-modal="true" aria-labelledby="imageUploadSettingsTitle">
     <section class="image-upload-settings-dialog">
       <button id="closeImageUploadSettings" class="about-close" type="button" data-i18n-title="close" data-i18n-aria-label="close" title="关闭" aria-label="关闭">
         <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
       </button>
-      <span class="eyebrow">PICGO</span>
+      <span class="eyebrow">IMAGES</span>
       <h2 id="imageUploadSettingsTitle" data-i18n="imageUploadSettings">图床设置</h2>
       <p data-i18n="imageUploadSettingsHint">首次启用只需按向导完成一次配置，以后粘贴、拖拽或选择图片即可自动上传。</p>
       <fieldset class="image-upload-mode-options">
         <legend data-i18n="imageInsertMode">图片插入方式</legend>
         <label><input type="radio" name="imageUploadMode" value="local" checked><span><strong data-i18n="localAssetsMode">本地 assets</strong><small data-i18n="localAssetsModeHint">保存相对路径，离线可用</small></span></label>
+        <label><input type="radio" name="imageUploadMode" value="embedded"><span><strong data-i18n="embeddedImagesMode">内嵌 Base64</strong><small data-i18n="embeddedImagesHint">图片直接存入 Markdown，编码约增加 33% 体积</small></span></label>
         <label><input type="radio" name="imageUploadMode" value="picgo-cloud"><span><strong data-i18n="picGoCloudMode">PicGo 在线图床</strong><small data-i18n="picGoCloudModeHint">浏览器登录，无需安装 PicGo</small></span></label>
         <label><input type="radio" name="imageUploadMode" value="picgo"><span><strong data-i18n="picGoMode">本机 PicGo</strong><small data-i18n="picGoModeHint">兼容已安装的 PicGo 与其他图床</small></span></label>
       </fieldset>
@@ -1248,6 +1297,7 @@
         </details>
       </div>
       <div id="localAssetsSummary" class="local-assets-summary"><strong data-i18n="localAssetsReadyTitle">本地模式已就绪</strong><span data-i18n="localAssetsReadyHint">图片会复制到文档旁的 assets，便于离线阅读和移动。</span></div>
+      <div id="embeddedImagesSummary" class="local-assets-summary hidden"><strong data-i18n="embeddedImagesMode">内嵌 Base64</strong><span data-i18n="embeddedImagesDetail">单张最多 25 MiB，文档最多 64 MiB；不会自动下载在线图片。</span></div>
       <div class="image-upload-settings-actions">
         <span></span>
         <button id="cancelImageUploadSettings" class="large-button secondary" type="button" data-i18n="cancel">取消</button>

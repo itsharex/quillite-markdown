@@ -189,6 +189,52 @@ func TestErrorLogRemovesLocalPaths(t *testing.T) {
 	}
 }
 
+func TestErrorLogRemovesHomeRelativePathTailsAndNamesWithSpaces(t *testing.T) {
+	for _, path := range []string{
+		`[用户目录]\SynologyDrive\私有合同\保密 报告.docx`,
+		`C:\Users\someone\Desktop\私有合同\保密 报告.docx`,
+		`/Users/someone/私有合同/保密 报告.docx`,
+	} {
+		log := buildSanitizedErrorLog("document.save", "rename "+path+": Access is denied.", "")
+		if strings.Contains(log, "私有合同") || strings.Contains(log, "保密") || strings.Contains(log, "someone") {
+			t.Fatalf("private filename remained: %q", log)
+		}
+	}
+}
+
+func TestErrorLogPathDelimitersAndSafeCauses(t *testing.T) {
+	for _, path := range []string{
+		`C:\Work\O'Brien\Budget Forecast.md`,
+		`[用户目录]\O'Brien\Budget Forecast.md`,
+		`\\server\Confidential Plans\Client Report.md`,
+		`/tmp/Confidential Plans/Client Report.md`,
+		`/opt/Confidential Plans/O'Brien/Client Report.md`,
+		`file:///tmp/Confidential Plans/Client Report.md`,
+	} {
+		log := buildSanitizedErrorLog("document.save", "rename "+path+": Access is denied.", "")
+		for _, private := range []string{"Brien", "Budget", "Confidential", "Client", "server", "Work"} {
+			if strings.Contains(log, private) {
+				t.Fatalf("private path remained: %q", log)
+			}
+		}
+		if !strings.Contains(log, "Access is denied.") {
+			t.Fatalf("safe cause removed: %q", log)
+		}
+	}
+	log := buildSanitizedErrorLog("document.save", `rename C:\Work\note.md: The cloud provider is not running.`, "")
+	if !strings.Contains(log, "The cloud provider is not running.") {
+		t.Fatalf("cloud cause removed: %q", log)
+	}
+	log = buildSanitizedErrorLog("document.save", `rename C:\Work\note.md: arbitrary private document text`, "")
+	if strings.Contains(log, "arbitrary private document text") {
+		t.Fatalf("untrusted tail leaked: %q", log)
+	}
+	log = buildSanitizedErrorLog("document.save", `link \\server\Private\note.md: The cloud operation cannot be performed on a file with incompatible hardlinks.; original restored`, "")
+	if !strings.Contains(log, "hard-link operation") || !strings.Contains(log, "original file was restored") {
+		t.Fatalf("recovery cause removed: %q", log)
+	}
+}
+
 func TestErrorLogRemovesProviderCredentials(t *testing.T) {
 	secrets := []string{
 		"sk-exampleSecret123456",

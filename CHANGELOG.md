@@ -4,6 +4,50 @@ All notable changes to Quillite Markdown are documented here.
 
 ## [Unreleased]
 
+## [2.7.6] - 2026-10-08
+
+### 简体中文
+
+- 发布审计补齐引用中换行图片组与单图后续正文的对齐保护，保留加粗/链接和引用/列表容器；字体面板关闭时同步恢复已保存样式，导出/打印不使用未保存的临时字体预览。无新增文件或目录删除操作。
+
+- 修复图片拆分丢失引用／列表结构、换行多图对齐吞图、实体路径与 Windows 反斜杠解析、列表内 Word 同排布局，以及跨目录另存后的图片加载状态；保留原文件和附件。
+
+- 简化正文与公式设置为 11 种中英文自动搭配风格和公式小/标准/大字号，使用非模态浮动面板在实际文档中预览；保存后跨重启记忆，取消/Escape/保存失败恢复原显示。兼容原有自定义字体搭配，保留 KaTeX 字体、代码等宽与撤回历史，不唤醒隐藏预览、不下载在线字体。
+- 修复 KaTeX 字体精简步骤误吞压缩 CSS 中主字体规则的问题，避免公式数字和部分符号意外跟随正文字体；继续只打包 WOFF2，同时保留全部字体与非字体规则。
+- 软件字体同步应用于 Markdown 编辑器正文与阅读/实时预览，切换时重新测量换行和光标位置但不重置文档、选区或撤回历史；行内代码及代码块继续使用等宽字体，仅编辑模式不因此启动预览渲染。
+- 编辑器图片预览扩展至本地附件、绝对/file 路径、HTTP(S) 在线、Base64/data、引用式 Markdown 和 HTML 图片，均支持左/中/右对齐和查看源码；仅编辑模式同样可用。新增相邻图片合并同排、拆成单张，每排 2–6 张独立对齐；不吞说明、不移动或删除图片，可完整撤销，最多提供 256 张预览。SVG 仅作为安全图片显示。
+- 图片同排与对齐在阅读预览、Word、样式 HTML 和 PDF 中保留；修复导出过滤误删图片对齐样式，改用严格样式白名单，Word 同排图片按列宽等比缩小且无表头/边框。修复同排对齐后意外展开源码，以及异步附件读取的范围移动/会话隔离。
+- 文件名支持点击重命名，编辑器显示保存位置；新文档首次手动保存选择名称与目录，自动保存保留草稿。另存窗口定位当前目录并记忆最近选择，跨目录副本重定位本地图片引用。重命名及另存不覆盖同名文件，不删除原草稿或附件。
+- 新增可选 Base64 图片内嵌（PNG/JPEG/WebP/GIF/BMP）与导出中心“便携 Markdown”，仅生成新副本；缺图、在线图片、复杂引用、单图或总大小超限时停止。AI 请求用可恢复占位符替代图片编码，并限制恢复体积。
+- 补齐 AI 响应完整性校验：流式与兼容非流式 SSE 共用帧解析，超过 8 MiB、缺少结束标记、畸形事件或平台中途报错时停止，部分结果不可应用；正常完整消息与空流式回退仍兼容。
+- 日志完整隐藏含单引号、空格、UNC 网络共享和任意 Unix 绝对路径，仅保留固定的安全错误类别；不再泄漏路径尾部或把可识别的云盘、权限和恢复原因一起丢弃。
+- 修复 Windows 云盘目录保存因硬链接被拒绝而失败：使用原生独立副本保留权限和附加数据，继续校验原文件身份、修订和并发写入；发布失败时恢复原文件或保留恢复材料。
+- 修复超长单行文档进入编辑时图表/公式扫描的正则堆栈溢出；逐行扫描保留 CRLF 与光标位置，同时修复 emoji 前缀导致公式定位错位和大量脚注的参数溢出。
+- AI 总结、编辑与校对在发送前按 Unicode 字符检查 200 万字符上限，并提供中文/英文拆分提示。兼容空 `content` 后的 `text` 字段、非流式请求返回的多事件 SSE 和空 JSON 流式响应回退；输出截断、平台拒答和空结果有明确提示，推理内容不作为最终正文。
+- Word/HTML/PDF 导出被拒绝访问时提示关闭占用程序或选择可写的新文件名，保留已有文件；64 MiB 打开限制与磁盘文件已删除的冲突提示更明确。
+- 预期的大小限制和导出权限问题不作为软件故障上报；修复日志中用户目录前缀后的路径以及带空格的文件名脱敏不完整的问题。
+
+### English
+
+- Release audit adds alignment protection for soft-break image groups in quotes and Markdown prose following single images, preserving formatting and containers. Closing typography restores saved CSS synchronously; export/print do not use unsaved typography drafts. No new file/directory deletion operations.
+
+- Fixed quote/list containers during image splitting, soft-break image-row alignment, entity and Windows path decoding, Word rows inside lists, and image loading after cross-directory Save As. Original documents and attachments remain untouched.
+
+- Simplified Body & math typography to 11 automatic bilingual styles and Small/Standard/Large math sizes. A nonmodal floating panel previews the actual document; save persists settings, while cancel/Escape/save failure restores the previous display. Existing custom font pairs remain supported; KaTeX fonts, monospaced code and undo history stay intact without waking hidden previews or downloading fonts.
+- Fixed KaTeX font optimization swallowing the main-font rule after a semicolon-less face in minified CSS, which let formula digits and some symbols inherit prose fonts. WOFF2-only packaging now preserves every face and all non-source rules.
+- App-font presets now apply consistently to Markdown editor prose and the reader/live preview. Changes remeasure wrapping and caret geometry without resetting the document, selection or undo history; inline/fenced code stays monospaced and editor-only mode does not restart preview rendering.
+- Editor image previews now support local attachments, absolute/file paths, HTTP(S), Base64/data, reference-style Markdown and HTML images, all with left/center/right alignment and optional source expansion, also in editor-only mode. Adjacent images can join into independently aligned rows of 2–6 or split again, with full undo, no lost captions, and no moved/deleted attachments; up to 256 previews. SVG is displayed only as an image.
+- Reading preview, Word, styled HTML and PDF preserve image rows/alignment. Export sanitization retains narrowly whitelisted image layout rather than removing it; Word fits row images proportionally to cells without headers/borders. Fixed unexpected source expansion after row alignment and local-image async range/session isolation.
+- Click file names to rename and see the save location. The first manual draft save chooses a name and folder while autosave retains draft protection. Save As starts in the current folder or last chosen draft folder and rebases local image references across directories. Renames and copies never overwrite existing names or remove drafts/attachments.
+- Added optional Base64 image embedding (PNG/JPEG/WebP/GIF/BMP) and Portable Markdown in the export center. Exports create new copies only and stop on missing/online/complex image references or size limits. AI requests replace image data with recoverable placeholders and bound restoration size.
+- Added shared SSE completeness checks for streamed and compatible non-streamed responses. Responses exceeding 8 MiB, missing termination, malformed events or provider errors stop processing and cannot expose applicable partial output. Complete message frames and empty-stream fallback remain compatible.
+- Diagnostic path redaction covers quotes, spaces, UNC shares and arbitrary absolute Unix paths. Only fixed safe error categories are retained, preserving recognizable cloud, permission and recovery causes without exposing private tails.
+- Fixed safe saves in Windows cloud-sync folders that reject hard links. Native independent copies preserve permissions and attached data; original identity, revision and concurrent-write protections remain enforced, with rollback or retained recovery material on failure.
+- Replaced whole-line regular expressions in diagram/formula scanning to avoid WebView stack overflow on very long lines while preserving CRLF and cursor offsets. Fixed formula offsets after emoji and unbounded argument spreading for large footnote lists.
+- AI summaries, edits and reviews check the 2,000,000 Unicode-character limit before sending, with localized guidance. Compatible response parsing accepts text fields after empty content, multi-event SSE for non-streaming requests, and one fallback for empty JSON streaming replies. Truncated, filtered and empty answers are explained; reasoning is never used as final document text.
+- Word/HTML/PDF access-denied failures explain how to close occupying apps or choose a writable new destination while retaining existing files. File-open size limits and conflicts caused by deleted disk files have clearer guidance.
+- Expected size limits and export permissions are not reported as software faults. Diagnostics redact complete local path tails and filenames containing spaces.
+
 ## [2.7.5] - 2026-09-18
 
 ### 简体中文

@@ -1,4 +1,5 @@
 import { DIAGRAM_TEMPLATES } from './diagram-templates.js';
+import { sourceLines } from './source-lines.js';
 
 export function identifyDiagramTemplate(source, engine = 'mermaid') {
   if (engine === 'echarts') {
@@ -32,7 +33,7 @@ export function findEditableDiagramFenceAt(source, position) {
   const target = Math.max(0, Math.min(text.length, Number(position) || 0));
   let offset = 0;
   let opening = null;
-  for (const rawLine of text.match(/.*(?:\r\n|\n|$)/gu) || []) {
+  for (const rawLine of sourceLines(text)) {
     if (!rawLine) continue;
     const line = rawLine.replace(/\r?\n$/u, '');
     const lineEnd = offset + line.length;

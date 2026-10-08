@@ -1,5 +1,8 @@
 import './styles.css';
 import * as Backend from '../wailsjs/go/main/App.js';
+import { rebaseMarkdownImages } from './portable-images.js';
+import { directoryFromDocumentPath } from './library-state.js';
+import { normalizeBodyTypography, readBodyTypography } from './body-typography.js';
 import {
   Environment,
   EventsOn,
@@ -50,8 +53,25 @@ if (desktopRuntime) {
 }
 document.documentElement.dataset.platform = platform;
 
+async function saveDocumentCopy(filePath, content) {
+  if (!desktopRuntime) return null;
+  const target = await Backend.ChooseDocumentSavePath(filePath);
+  if (!target) return null;
+  const sourceDirectory = directoryFromDocumentPath(filePath);
+  const targetDirectory = directoryFromDocumentPath(target);
+  const normalize = path => path.replaceAll('\\', '/').replace(/\/$/, '');
+  const windowsPaths = /^[A-Za-z]:|^\\\\/.test(filePath);
+  const equal = windowsPaths ? normalize(sourceDirectory).toLowerCase() === normalize(targetDirectory).toLowerCase() : normalize(sourceDirectory) === normalize(targetDirectory);
+  const relocated = !equal;
+  const transform = text => relocated ? rebaseMarkdownImages(text, sourceDirectory) : text;
+  const prepared = await transform(content);
+  const saved = await Backend.SaveDocumentCopy(filePath, target, prepared);
+  if (!saved || saved.content !== prepared) throw new Error('DOCUMENT_CONFLICT: copy receipt mismatch');
+  return { ...saved, sourceContent: content, rebaseContent: transform };
+}
+
 window.quilliteMarkdown = {
-  newFile: () => desktopRuntime ? Backend.NewFile() : resolved({ path: 'New document.md', name: 'New document.md', directory: '.', content: '' }),
+  newFile: () => desktopRuntime ? Backend.NewFile() : resolved({ path: 'New document.md', name: 'New document.md', directory: '.', content: '', draft: true }),
   openFile: () => desktopRuntime ? Backend.OpenFile() : resolved(null),
   openFolder: () => desktopRuntime ? Backend.OpenFolder() : resolved(null),
   readFile: filePath => desktopRuntime ? Backend.ReadFile(filePath) : resolved(null),
@@ -62,12 +82,15 @@ window.quilliteMarkdown = {
   checkDocumentAssets: (path, refs) => desktopRuntime ? Backend.CheckDocumentAssets(path, refs) : resolved(refs),
   showDocumentBackupDirectory: () => desktopRuntime ? Backend.ShowDocumentBackupDirectory() : Promise.reject(new Error('DESKTOP_REQUIRED')),
   saveDiagnosticReport: report => desktopRuntime ? Backend.SaveDiagnosticReport(report) : Promise.reject(new Error('DESKTOP_REQUIRED')),
-  saveConflictCopy: (filePath, content) => desktopRuntime ? Backend.SaveConflictCopy(filePath, content) : resolved(null),
+  saveConflictCopy: saveDocumentCopy,
   openRecentFile: filePath => desktopRuntime ? Backend.OpenRecentFile(filePath) : resolved(null),
   openReferenceDocument: kind => desktopRuntime ? Backend.OpenReferenceDocument(kind) : resolved(null),
   canEditFile: filePath => desktopRuntime ? Backend.CanEditFile(filePath) : resolved(true),
   saveFile: (filePath, content, revision) => desktopRuntime ? Backend.SaveFileWithRevision(filePath, content, revision || '') : resolved(null),
-  saveAs: (filePath, content) => desktopRuntime ? Backend.SaveAs(filePath, content) : resolved(null),
+  saveAs: saveDocumentCopy,
+  renameDocument: (path, name, revision) => desktopRuntime ? Backend.RenameDocument(path, name, revision) : Promise.reject(new Error('DESKTOP_REQUIRED')),
+  exportPortableMarkdown: (path, content) => desktopRuntime ? Backend.ExportPortableMarkdown(path, content) : Promise.reject(new Error('DESKTOP_REQUIRED')),
+  readPortableImage: (ref, directory) => desktopRuntime ? Backend.ReadPortableImage(ref, directory) : Promise.reject(new Error('DESKTOP_REQUIRED')),
   listDocumentVersions: filePath => desktopRuntime ? Backend.ListDocumentVersions(filePath) : resolved([]),
   getDocumentVersion: (filePath, id) => desktopRuntime ? Backend.GetDocumentVersion(filePath, id) : resolved(null),
   saveRecoverySnapshot: input => {
@@ -106,7 +129,7 @@ window.quilliteMarkdown = {
   importImage: (filePath, sourcePath) => desktopRuntime ? Backend.ImportImage(filePath, sourcePath) : resolved(sourcePath),
   savePastedImage: (filePath, dataURL) => desktopRuntime ? Backend.SavePastedImage(filePath, dataURL) : resolved(dataURL),
   getImageUploadSettings: () => desktopRuntime ? Backend.GetImageUploadSettings() : resolved({ mode: 'local', serverUrl: 'http://127.0.0.1:36677', hasSecret: false, hasCloudToken: false }),
-  setImageUploadSettings: input => desktopRuntime ? Backend.SetImageUploadSettings(input) : resolved({ mode: ['picgo-cloud', 'picgo'].includes(input?.mode) ? input.mode : 'local', serverUrl: input?.serverUrl || 'http://127.0.0.1:36677', hasSecret: Boolean(input?.secret), hasCloudToken: input?.mode === 'picgo-cloud' }),
+  setImageUploadSettings: input => desktopRuntime ? Backend.SetImageUploadSettings(input) : resolved({ mode: ['embedded', 'picgo-cloud', 'picgo'].includes(input?.mode) ? input.mode : 'local', serverUrl: input?.serverUrl || 'http://127.0.0.1:36677', hasSecret: Boolean(input?.secret), hasCloudToken: input?.mode === 'picgo-cloud' }),
   loginPicGoCloud: () => desktopRuntime ? Backend.LoginPicGoCloud() : Promise.reject(new Error('PicGo Cloud sign-in is unavailable in browser preview')),
   logoutPicGoCloud: () => desktopRuntime ? Backend.LogoutPicGoCloud() : resolved({ mode: 'local', serverUrl: 'http://127.0.0.1:36677', hasSecret: false, hasCloudToken: false }),
   testPicGoCloud: () => desktopRuntime ? Backend.TestPicGoCloud() : Promise.reject(new Error('PicGo Cloud is unavailable in browser preview')),
@@ -118,7 +141,7 @@ window.quilliteMarkdown = {
   listFolder: root => desktopRuntime ? Backend.ListFolder(root) : resolved({ root, files: [] }),
   getPreferences: () => desktopRuntime
     ? Backend.GetPreferences()
-    : resolved({ language: localStorage.getItem('language') || 'zh-CN', fontFamily: localStorage.getItem('fontFamily') || 'system', recentFiles: [], recentFileStatuses: [], pinnedRecentFiles: [], favoriteFiles: [], favoriteFileStatuses: [], explorerRoot: localStorage.getItem('explorerRoot') || '', usageAnalytics: true }),
+    : resolved({ language: localStorage.getItem('language') || 'zh-CN', fontFamily: localStorage.getItem('fontFamily') || 'system', bodyTypography: readBodyTypography(localStorage), recentFiles: [], recentFileStatuses: [], pinnedRecentFiles: [], favoriteFiles: [], favoriteFileStatuses: [], explorerRoot: localStorage.getItem('explorerRoot') || '', usageAnalytics: true }),
   needsLanguageSelection: () => desktopRuntime ? Backend.NeedsLanguageSelection() : resolved(false),
   removeRecent: filePath => desktopRuntime ? Backend.RemoveRecent(filePath) : resolved(),
   setRecentPinned: (filePath, pinned) => desktopRuntime ? Backend.SetRecentPinned(filePath, pinned) : resolved(),
@@ -135,6 +158,7 @@ window.quilliteMarkdown = {
   setTheme: dark => desktopRuntime ? Backend.SetTheme(dark) : resolved(),
   setLanguage: language => desktopRuntime ? Backend.SetLanguage(language) : resolved(),
   setFontFamily: fontFamily => desktopRuntime ? Backend.SetFontFamily(fontFamily) : resolved(fontFamily),
+  setBodyTypography: settings => desktopRuntime ? Backend.SetBodyTypography(settings) : resolved(normalizeBodyTypography(settings)),
   setUsageAnalytics: enabled => desktopRuntime ? Backend.SetUsageAnalytics(enabled) : resolved({ usageAnalytics: enabled }),
   getAISettings: () => desktopRuntime ? Backend.GetAISettings() : resolved(browserAISettings(sessionStorage.getItem('activeAIProvider') || 'deepseek')),
   getAIProviderSettings: provider => desktopRuntime ? Backend.GetAIProviderSettings(provider) : resolved(browserAISettings(provider)),
@@ -190,12 +214,12 @@ window.quilliteMarkdown = {
   onAIRewriteChunk: callback => desktopRuntime ? EventsOn('ai:rewrite-chunk', callback) : () => {},
   onAIProgress: callback => desktopRuntime ? EventsOn('ai:progress', callback) : () => {},
   reportErrorLog: (source, message, stack) => desktopRuntime ? Backend.ReportErrorLog(source, message, stack) : resolved(),
-  getFeedbackSystemInfo: () => desktopRuntime ? Backend.GetFeedbackSystemInfo() : resolved({ appVersion: '2.7.5', os: browserPlatform === 'darwin' ? 'macos' : 'windows', systemVersion: navigator.userAgent }),
+  getFeedbackSystemInfo: () => desktopRuntime ? Backend.GetFeedbackSystemInfo() : resolved({ appVersion: '2.7.6', os: browserPlatform === 'darwin' ? 'macos' : 'windows', systemVersion: navigator.userAgent }),
   selectFeedbackImages: () => desktopRuntime ? Backend.SelectFeedbackImages() : resolved([]),
   submitFeedback: input => desktopRuntime ? Backend.SubmitFeedback(input) : resolved(),
   getWindowsInstallSafety: () => desktopRuntime
     ? Backend.GetWindowsInstallSafety()
-    : resolved({ applicable: false, safe: true, currentVersion: '2.7.5', downloadUrl: 'https://qm.ssssa.cn/#download' }),
+    : resolved({ applicable: false, safe: true, currentVersion: '2.7.6', downloadUrl: 'https://qm.ssssa.cn/#download' }),
   checkForUpdates: force => desktopRuntime
     ? Backend.CheckForUpdates(force)
     : resolved(mockUpdate
@@ -203,14 +227,14 @@ window.quilliteMarkdown = {
           checked: true,
           available: true,
           currentVersion: '2.4.4',
-          latestVersion: '2.7.5',
-          releaseName: localStorage.getItem('language') === 'en' ? 'Quillite Markdown 2.7.5' : '轻阅 Markdown 2.7.5',
+          latestVersion: '2.7.6',
+          releaseName: localStorage.getItem('language') === 'en' ? 'Quillite Markdown 2.7.6' : '轻阅 Markdown 2.7.6',
           releaseNotes: localStorage.getItem('language') === 'en'
             ? 'Added visual table editing, rich paste, and spell checking\nAdded PicGo image hosting with upload progress\nAdded a 12-format Export Center and crisp A4 image pages'
             : '新增可视化表格、富文本粘贴与拼写检查\n新增 PicGo 图床和上传进度\n新增 12 种格式导出中心与 A4 高清图片分页',
           releaseUrl: 'https://qm.ssssa.cn/#download'
         }
-      : { checked: true, available: false, currentVersion: '2.7.5', latestVersion: '2.7.5' }),
+      : { checked: true, available: false, currentVersion: '2.7.6', latestVersion: '2.7.6' }),
   snoozeUpdates: days => desktopRuntime ? Backend.SnoozeUpdates(days) : resolved(),
   downloadAndApplyUpdate: () => desktopRuntime ? Backend.DownloadAndApplyUpdate() : resolved(),
   onUpdateProgress: callback => desktopRuntime ? EventsOn('update:progress', callback) : () => {},

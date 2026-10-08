@@ -54,6 +54,7 @@ type docxImage struct {
 	WidthEMU    int
 	HeightEMU   int
 	Alt         string
+	Alignment   string
 }
 
 type docxRun struct {
@@ -304,29 +305,50 @@ func (b *docxBuilder) renderList(node *html.Node, ordered bool, listLevel, numID
 			continue
 		}
 		var runs []docxRun
+		marked := false
+		flush := func(force bool) {
+			if !force && !runsHaveContent(runs) {
+				runs = nil
+				return
+			}
+			if !marked {
+				b.writeListParagraph(listLevel, numID, runs)
+				marked = true
+			} else {
+				b.writeParagraph("Normal", listLevel+1, runs)
+			}
+			runs = nil
+		}
 		for item := child.FirstChild; item != nil; item = item.NextSibling {
 			if item.Type == html.ElementNode && (strings.EqualFold(item.Data, "ul") || strings.EqualFold(item.Data, "ol")) {
-				continue
-			}
-			runs = append(runs, b.inlineRuns(item, docxFormat{})...)
-		}
-		b.writeListParagraph(listLevel, numID, runs)
-		for item := child.FirstChild; item != nil; item = item.NextSibling {
-			if item.Type == html.ElementNode && strings.EqualFold(item.Data, "ul") {
-				b.renderList(item, false, listLevel+1, 1)
-			}
-			if item.Type == html.ElementNode && strings.EqualFold(item.Data, "ol") {
+				flush(!marked)
 				nestedNumID := numID
 				if !ordered {
 					nestedNumID = 0
 				}
-				b.renderList(item, true, listLevel+1, nestedNumID)
+				b.renderList(item, strings.EqualFold(item.Data, "ol"), listLevel+1, nestedNumID)
+				continue
 			}
+			if item.Type == html.ElementNode && strings.EqualFold(item.Data, "table") && hasHTMLClass(item, "quillite-image-row") {
+				flush(!marked)
+				if !b.writeImageRowAtLevel(item, listLevel+1) {
+					b.writeTable(item)
+				}
+				continue
+			}
+			if item.Type == html.ElementNode && strings.EqualFold(item.Data, "p") {
+				flush(false)
+			}
+			runs = append(runs, b.inlineRuns(item, docxFormat{})...)
 		}
+		flush(!marked)
 	}
 }
 
 func (b *docxBuilder) writeTable(table *html.Node) {
+	if b.writeImageRow(table) {
+		return
+	}
 	rows := collectElements(table, "tr")
 	if len(rows) == 0 {
 		return
@@ -360,6 +382,101 @@ func (b *docxBuilder) writeTable(table *html.Node) {
 		b.body.WriteString(`</w:tr>`)
 	}
 	b.body.WriteString(`</w:tbl>`)
+}
+
+// Image rows are ordinary HTML tables in the saved source, but not data-table
+// headers in Word. Validate the entire structure before using this layout.
+func (b *docxBuilder) writeImageRow(table *html.Node) bool {
+	return b.writeImageRowAtLevel(table, 0)
+}
+
+func (b *docxBuilder) writeImageRowAtLevel(table *html.Node, level int) bool {
+	if !hasHTMLClass(table, "quillite-image-row") {
+		return false
+	}
+	rows := collectElements(table, "tr")
+	if len(rows) != 1 || len(collectElements(table, "table")) > 1 {
+		return false
+	}
+	cells := directChildElements(rows[0], "td")
+	if len(cells) < 2 || len(cells) > 6 {
+		return false
+	}
+	var pureStructure func(*html.Node) bool
+	pureStructure = func(node *html.Node) bool {
+		if node.Type == html.TextNode {
+			return strings.TrimSpace(node.Data) == ""
+		}
+		if node.Type != html.ElementNode {
+			return false
+		}
+		switch node.Data {
+		case "table", "tbody", "tr", "td", "img":
+		default:
+			return false
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			if !pureStructure(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if !pureStructure(table) {
+		return false
+	}
+	images := make([]*html.Node, 0, len(cells))
+	for _, cell := range cells {
+		var imageNode *html.Node
+		for child := cell.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type == html.TextNode && strings.TrimSpace(child.Data) == "" {
+				continue
+			}
+			if child.Type != html.ElementNode || child.Data != "img" || imageNode != nil {
+				return false
+			}
+			imageNode = child
+		}
+		if imageNode == nil {
+			return false
+		}
+		images = append(images, imageNode)
+	}
+	indent := min(max(level, 0), 8) * 720
+	width := (9398 - indent) / len(cells)
+	b.body.WriteString(`<w:tbl><w:tblPr><w:tblW w:w="` + strconv.Itoa(9398-indent) + `" w:type="dxa"/><w:tblInd w:w="` + strconv.Itoa(indent) + `" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:start w:w="140" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:end w:w="140" w:type="dxa"/></w:tblCellMar><w:tblBorders>`)
+	for _, edge := range []string{"top", "left", "bottom", "right", "insideH", "insideV"} {
+		b.body.WriteString(`<w:` + edge + ` w:val="nil"/>`)
+	}
+	b.body.WriteString(`</w:tblBorders></w:tblPr><w:tblGrid>`)
+	for range cells {
+		b.body.WriteString(`<w:gridCol w:w="` + strconv.Itoa(width) + `"/>`)
+	}
+	b.body.WriteString(`</w:tblGrid><w:tr>`)
+	for _, imageNode := range images {
+		b.body.WriteString(`<w:tc><w:tcPr><w:tcW w:w="` + strconv.Itoa(width) + `" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr>`)
+		run := b.imageRun(imageNode)
+		if run != nil {
+			if run.Image != nil {
+				fitted := *run.Image // Do not change the reusable media asset.
+				limit := (width - 280) * 635
+				if fitted.WidthEMU > limit {
+					fitted.HeightEMU = fitted.HeightEMU * limit / fitted.WidthEMU
+					fitted.WidthEMU = limit
+				}
+				if fitted.Alignment == "" {
+					fitted.Alignment = "center"
+				}
+				run.Image = &fitted
+			}
+			b.writeParagraph("TableText", 0, []docxRun{*run})
+		} else {
+			b.writeParagraph("TableText", 0, nil)
+		}
+		b.body.WriteString(`</w:tc>`)
+	}
+	b.body.WriteString(`</w:tr></w:tbl>`)
+	return true
 }
 
 func (b *docxBuilder) inlineRuns(node *html.Node, format docxFormat) []docxRun {
@@ -432,6 +549,23 @@ func (b *docxBuilder) inlineRuns(node *html.Node, format docxFormat) []docxRun {
 
 func (b *docxBuilder) writeParagraph(style string, indentLevel int, runs []docxRun) {
 	runs = removeDuplicateMathSourceRuns(runs)
+	// A display:block aligned image has its own paragraph, not the alignment
+	// of adjacent prose. Preserve the surrounding runs in their original order.
+	if len(runs) > 1 {
+		start := 0
+		for index, run := range runs {
+			if run.Image == nil || run.Image.Alignment == "" {
+				continue
+			}
+			b.writeParagraph(style, indentLevel, runs[start:index])
+			b.writeParagraph(style, indentLevel, runs[index:index+1])
+			start = index + 1
+		}
+		if start > 0 {
+			b.writeParagraph(style, indentLevel, runs[start:])
+			return
+		}
+	}
 	if !runsHaveContent(runs) {
 		return
 	}
@@ -441,6 +575,9 @@ func (b *docxBuilder) writeParagraph(style string, indentLevel int, runs []docxR
 	}
 	if indentLevel > 0 {
 		b.body.WriteString(`<w:ind w:left="` + strconv.Itoa(indentLevel*360) + `"/>`)
+	}
+	if len(runs) == 1 && runs[0].Image != nil && runs[0].Image.Alignment != "" {
+		b.body.WriteString(`<w:jc w:val="` + runs[0].Image.Alignment + `"/>`)
 	}
 	b.body.WriteString(`</w:pPr>`)
 	for _, run := range runs {
@@ -499,6 +636,32 @@ func taggedMathOMML(node *html.Node) (string, string, bool) {
 
 func (b *docxBuilder) writeListParagraph(listLevel, numID int, runs []docxRun) {
 	runs = removeDuplicateMathSourceRuns(runs)
+	if len(runs) > 1 {
+		start, leadWritten := 0, false
+		emit := func(segment []docxRun) {
+			if !runsHaveContent(segment) {
+				return
+			}
+			if !leadWritten {
+				b.writeListParagraph(listLevel, numID, segment)
+				leadWritten = true
+			} else {
+				b.writeParagraph("ListParagraph", listLevel+1, segment)
+			}
+		}
+		for index, run := range runs {
+			if run.Image == nil || run.Image.Alignment == "" {
+				continue
+			}
+			emit(runs[start:index])
+			emit(runs[index : index+1])
+			start = index + 1
+		}
+		if start > 0 {
+			emit(runs[start:])
+			return
+		}
+	}
 	if !runsHaveContent(runs) {
 		return
 	}
@@ -509,7 +672,11 @@ func (b *docxBuilder) writeListParagraph(listLevel, numID int, runs []docxRun) {
 	if level > 8 {
 		level = 8
 	}
-	b.body.WriteString(`<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="` + strconv.Itoa(level) + `"/><w:numId w:val="` + strconv.Itoa(numID) + `"/></w:numPr></w:pPr>`)
+	b.body.WriteString(`<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="` + strconv.Itoa(level) + `"/><w:numId w:val="` + strconv.Itoa(numID) + `"/></w:numPr>`)
+	if len(runs) == 1 && runs[0].Image != nil && runs[0].Image.Alignment != "" {
+		b.body.WriteString(`<w:jc w:val="` + runs[0].Image.Alignment + `"/>`)
+	}
+	b.body.WriteString(`</w:pPr>`)
 	for _, run := range runs {
 		b.writeRun(run)
 	}
@@ -681,10 +848,37 @@ func (b *docxBuilder) imageRun(node *html.Node) *docxRun {
 	image := docxImage{
 		RelID: relID, Name: "image" + strconv.Itoa(len(b.images)+1) + "." + extension,
 		ContentType: contentTypeForExtension(extension), Extension: extension, Data: data,
-		WidthEMU: width, HeightEMU: height, Alt: htmlAttribute(node, "alt"),
+		WidthEMU: width, HeightEMU: height, Alt: htmlAttribute(node, "alt"), Alignment: docxImageAlignment(htmlAttribute(node, "style")),
 	}
 	b.images = append(b.images, image)
 	return &docxRun{Image: &b.images[len(b.images)-1]}
+}
+
+// Interpret only the fixed layout values emitted by the image toolbar; never
+// copy arbitrary author CSS into the Office XML.
+func docxImageAlignment(style string) string {
+	properties := make(map[string]string)
+	for _, declaration := range strings.Split(style, ";") {
+		key, value, ok := strings.Cut(declaration, ":")
+		if ok {
+			properties[strings.ToLower(strings.TrimSpace(key))] = strings.ToLower(strings.TrimSpace(value))
+		}
+	}
+	if properties["display"] != "block" {
+		return ""
+	}
+	left, right := properties["margin-left"], properties["margin-right"]
+	zero := func(value string) bool { return value == "0" || value == "0px" }
+	if zero(left) && right == "auto" {
+		return "left"
+	}
+	if left == "auto" && right == "auto" {
+		return "center"
+	}
+	if left == "auto" && zero(right) {
+		return "right"
+	}
+	return ""
 }
 
 func (b *docxBuilder) loadImage(source string) ([]byte, string, error) {

@@ -32,7 +32,7 @@ func (a *App) savedDocumentReceipt(path, content string, remember bool) (*Docume
 	doc := &Document{
 		Path: absPath, Name: filepath.Base(absPath), Directory: filepath.Dir(absPath),
 		Content: content, Revision: documentRevision([]byte(content)), Size: int64(len(content)),
-		ModifiedAt: time.Now().Format(time.RFC3339Nano),
+		ModifiedAt: time.Now().Format(time.RFC3339Nano), Draft: a.isDraft(absPath),
 	}
 	if remember {
 		_ = a.rememberFile(absPath)

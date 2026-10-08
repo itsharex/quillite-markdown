@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>内嵌图片编辑器回归验证</title>
+<body><h1>内嵌图片编辑器回归验证</h1>
+<nav><button id="sample">示例文档</button><button id="mixed">混合图片文档</button><button id="row">同段多图</button><button id="missing">缺图文档</button><button id="async">异步读取验证</button><button id="large">大图片文档</button><button id="undo">撤销修改</button><button id="refresh">刷新阅读预览</button><button id="check">运行安全检查</button></nav>
+<button id="directory">另存目录会话验证</button>
+<output id="result" aria-live="polite"></output>
+<output id="checks" aria-live="polite"></output>
+<div class="audit-panes"><section><h2>编辑器</h2><div id="markdownEditor"></div></section><section><h2>阅读预览</h2><div id="reading" class="markdown-body"></div></section></div>
+<script type="module">
+import '../../src/styles.css';
+import { basicSetup } from 'codemirror';
+import { EditorState } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { markdown } from '@codemirror/lang-markdown';
+import { undo, undoDepth } from '@codemirror/commands';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+import { embeddedImagePreview, imagePreviewField, imagePreviewPhrases, refreshImagePreviews, imagePreviewContext, updateImagePreviewDirectory } from '../../src/embedded-image-preview.js';
+import { normalizeImageRows } from '../../src/image-layout.js';
+
+const canvas = document.createElement('canvas'); canvas.width = 240; canvas.height = 140;
+const context = canvas.getContext('2d'); context.fillStyle = '#d6f3e5'; context.fillRect(0, 0, 240, 140);
+context.fillStyle = '#129969'; context.fillRect(20, 20, 200, 100); context.fillStyle = '#fff'; context.font = '26px sans-serif'; context.fillText('示例图片', 66, 82);
+const data = canvas.toDataURL('image/png');
+const localRead = async (ref, directory) => {
+  if (!['/fixture', '/fixture-new'].includes(directory)) throw new Error('wrong directory');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  if (ref.includes('missing')) throw new Error('missing image');
+  return data;
+};
+const online = new URL('./sample-image.svg', location.href).href;
+const mixed = `# 多种来源图片\n\n![本地附件](assets/sample.jpg)\n\n![内嵌图片](${data})\n\n![在线图片](${online})\n\n下面的说明不能被合并。\n\n![引用式][photo]\n\n<img src="file:///D:/fixture/sample.jpg" width="120" alt="HTML 图片">\n\n[photo]: assets/sample.jpg`;
+const original = `# 图片编辑\n\n这一段在图片上面。\n\n![示例图片](${data})\n\n这一段在图片下面。`;
+let baseline = original;
+const output = document.querySelector('#result');
+const snapshot = () => {
+  const field = view.state.field(imagePreviewField);
+  output.textContent = `图片 ${field.items.length} · 折叠 ${field.atoms.size} · 正文字符 ${view.state.doc.length} · 撤销深度 ${undoDepth(view.state)} · ${view.state.doc.toString() === baseline ? '原文未改动' : '正文已修改'}`;
+};
+const extensions = [basicSetup, markdown(), embeddedImagePreview, imagePreviewContext.of({ directory: '/fixture', readImageData: localRead }), EditorView.lineWrapping,
+  EditorState.phrases.of(imagePreviewPhrases), EditorView.updateListener.of(() => snapshot())];
+const view = new EditorView({ state: EditorState.create({ doc: original, extensions }), parent: document.querySelector('#markdownEditor') });
+const render = () => {
+  const reading = document.querySelector('#reading'); reading.innerHTML = DOMPurify.sanitize(marked.parse(view.state.doc.toString())); normalizeImageRows(reading);
+  for (const img of reading.querySelectorAll('img')) if (!/^(data:|https?:)/i.test(img.getAttribute('src'))) img.src = data;
+};
+snapshot(); render();
+document.querySelector('#sample').onclick = () => { baseline = original; view.setState(EditorState.create({ doc: original, extensions })); snapshot(); render(); };
+const load = source => { baseline = source; view.setState(EditorState.create({ doc: source, extensions })); snapshot(); render(); };
+document.querySelector('#mixed').onclick = () => load(mixed);
+document.querySelector('#row').onclick = () => load(`# 同段三张图片\n\n![本地](assets/sample.jpg) ![内嵌](${data}) ![在线](${online})\n\n下面说明保持不变。`);
+document.querySelector('#missing').onclick = () => load('![缺图](assets/missing.jpg)\n\n![本地](assets/sample.jpg)');
+document.querySelector('#async').onclick = async () => {
+  load('![本地](assets/sample.jpg)');
+  view.dispatch({ changes: { from: 0, insert: '添加文字\n\n' } });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const img = document.querySelector('.cm-image-frame img');
+  const moved = img?.getAttribute('src') === data && img.naturalWidth > 0;
+  load('![旧会话](assets/sample.jpg)');
+  load('![新会话缺图](assets/missing.jpg)');
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const fresh = document.querySelector('.cm-image-frame img');
+  document.querySelector('#checks').textContent = moved && !fresh?.getAttribute('src') ? 'PASS: 图片范围移动后加载、旧异步结果不进入新文档' : 'FAIL: async session';
+};
+document.querySelector('#directory').onclick = async () => {
+  load('![目录图片](assets/sample.jpg)');
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const previous = document.querySelector('.cm-image-frame img');
+  const session = view.state.field(imagePreviewField).session;
+  view.dispatch({ effects: updateImagePreviewDirectory.of('/fixture-new') });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const fresh = document.querySelector('.cm-image-frame img');
+  const succeeded = fresh !== previous && !session.active && fresh?.naturalWidth > 0
+    && document.querySelector('.cm-image-error').hidden;
+  view.dispatch({ effects: updateImagePreviewDirectory.of('/missing-folder') });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const failed = document.querySelector('.cm-image-frame img').hidden
+    && !document.querySelector('.cm-image-error').hidden;
+  document.querySelector('#checks').textContent = succeeded && failed ? 'PASS: 另存目录后重建图片 DOM、加载与失败状态隔离' : 'FAIL: directory session';
+};
+document.querySelector('#large').onclick = () => {
+  canvas.width = 640; canvas.height = 480;
+  const pixels = context.createImageData(640, 480);
+  let seed = 23;
+  for (let i = 0; i < pixels.data.length; i += 4) { seed = (seed * 1664525 + 1013904223) >>> 0; pixels.data[i] = seed & 255; pixels.data[i + 1] = (seed >>> 8) & 255; pixels.data[i + 2] = (seed >>> 16) & 255; pixels.data[i + 3] = 255; }
+  context.putImageData(pixels, 0, 0);
+  baseline = `# 大图片\n\n![测试](${canvas.toDataURL('image/png')})\n\n结尾文字`;
+  view.setState(EditorState.create({ doc: baseline, extensions })); snapshot(); render();
+};
+document.querySelector('#undo').onclick = () => { undo(view); snapshot(); render(); };
+document.querySelector('#refresh').onclick = render;
+document.querySelector('#check').onclick = () => {
+  const failures = [], assert = (condition, label) => { if (!condition) failures.push(label); };
+  const staleHandler = document.querySelector('.cm-image-tools button[data-image-action="right"]')?.onclick;
+  const doc = view.state.doc.toString();
+  const count = view.state.field(imagePreviewField).items.length;
+  if (view.state.field(imagePreviewField).items[0]?.row) {
+    document.querySelector('.cm-image-align-tools button[data-image-action="left"]')?.click();
+    assert(!view.state.field(imagePreviewField).items[0].open, 'alignment expanded row source');
+    undo(view); assert(view.state.doc.toString() === doc, 'row alignment undo changed source');
+  }
+  view.setState(EditorState.create({ doc, extensions }));
+  staleHandler?.();
+  assert(view.state.doc.toString() === doc, 'stale widget mutated new session');
+  view.dispatch({ selection: { anchor: view.state.doc.length } });
+  view.dispatch({ changes: { from: view.state.doc.length, insert: '\nNew text' } });
+  assert(view.state.field(imagePreviewField).items.length === count, 'range mapping lost image');
+  undo(view);
+  assert(view.state.doc.toString() === doc, 'typing undo changed source');
+  const current = view.state.doc;
+  view.dispatch({ effects: refreshImagePreviews.of({ doc: current, items: view.state.field(imagePreviewField).items }) });
+  assert(view.state.field(imagePreviewField).items[0].images.length > 0, 'widget images lost');
+  document.querySelector('#checks').textContent = failures.length ? `FAIL: ${failures.join(', ')}` : 'PASS: 会话隔离、范围映射、正文撤销、图片数据一致';
+};
+</script>
+<style>
+body { padding: 24px; font: 14px system-ui; color: #24372e; background: #f7faf8; }
+h1 { font-size: 22px; } h2 { font-size: 16px; padding: 12px 16px; border-bottom: 1px solid #dce5e0; }
+nav { display: flex; gap: 8px; margin: 12px 0; } nav button { padding: 8px 12px; border: 1px solid #9ccdb7; border-radius: 6px; background: #fff; color: #14865d; }
+output { display: block; padding: 8px; min-height: 24px; }
+.audit-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.audit-panes section { min-width: 0; border: 1px solid #dce5e0; background: #fff; border-radius: 10px; overflow: hidden; }
+#markdownEditor { height: 540px; } #markdownEditor .cm-scroller { overflow: auto; } #markdownEditor .cm-content { padding: 12px; }
+#reading { padding: 0 18px; font-size: 16px; }
+</style>
+</body></html>

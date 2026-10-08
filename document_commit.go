@@ -14,6 +14,10 @@ func commitDocumentReplacement(staged, target, revision string) error {
 // The callback is a per-call seam for deterministic external-save regression
 // tests, not a global hook and not exposed through the application bridge.
 func commitDocumentReplacementWithPublish(staged, target, revision string, publish func(string, string) error) error {
+	return commitDocumentReplacementWithOperations(staged, target, revision, publish, prepareDocumentCandidate)
+}
+
+func commitDocumentReplacementWithOperations(staged, target, revision string, publish, prepare func(string, string) error) error {
 	info, err := os.Lstat(target)
 	if os.IsNotExist(err) && revision == "" {
 		return publish(staged, target)
@@ -27,10 +31,9 @@ func commitDocumentReplacementWithPublish(staged, target, revision string, publi
 	}
 	original := filepath.Join(dir, "original")
 	candidate := filepath.Join(dir, "candidate")
-	// Probe the required operation using ONLY our staged file, before moving
-	// any user file. exFAT and some network volumes cannot create hard links;
-	// on those volumes even the POSIX create-only rollback would be unavailable.
-	if err = os.Link(staged, candidate); err != nil {
+	// Probe using ONLY our staged file before moving any user file. Windows
+	// uses a native copy; POSIX requires hard links for create-only rollback.
+	if err = prepare(staged, candidate); err != nil {
 		_ = os.Remove(dir)
 		return fmt.Errorf("DOCUMENT_SAFE_SAVE_ACCESS: filesystem cannot stage a protected save; save a new copy: %w", err)
 	}
@@ -72,7 +75,7 @@ func commitDocumentReplacementWithPublish(staged, target, revision string, publi
 	// Preserve metadata using the existing platform replacement implementation,
 	// but ONLY inside this newly-created private directory. The original inode
 	// stays reachable, including writes through already-open POSIX descriptors.
-	if err = os.Link(original, candidate); err != nil {
+	if err = prepare(original, candidate); err != nil {
 		return failed(err)
 	}
 	if err = replaceDocumentFile(staged, candidate); err != nil {

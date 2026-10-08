@@ -245,9 +245,36 @@ test('software font presets update the interface and persist through preferences
   assert.match(renderer, /window\.quilliteMarkdown\.setFontFamily\(state\.fontFamily\)/);
   assert.match(renderer, /setFontFamily\(prefs\.fontFamily \|\| 'system', true, false\)/);
   assert.match(styles, /body \{[\s\S]*font-family: var\(--app-font-family\);/);
-  assert.match(styles, /\.markdown-body \{ font-family: var\(--app-font-family\);/);
+  assert.match(styles, /\.markdown-body \{ font-family: var\(--body-font-family, var\(--app-font-family\)\);/);
+  assert.match(renderer, /'\.cm-scroller': \{ overflow: 'auto', fontFamily: 'var\(--body-font-family, var\(--app-font-family\)\)' \}/);
+  assert.match(renderer, /tag: tags\.monospace,[^\n]*fontFamily: '"Cascadia Code", Consolas, monospace'/);
   assert.match(styles, /\.plain-text \{[^}]*font-family: "Cascadia Code"/);
   assert.match(styles, /\.markdown-body code:not\(\.hljs\) \{[^}]*font-family: "Cascadia Code"/);
+});
+
+test('font changes remeasure the existing editor without resetting its state or rendering a hidden preview', async () => {
+  const source = renderer.slice(renderer.indexOf('async function setFontFamily('), renderer.indexOf('\nfunction syncBodyTypography('));
+  assert.doesNotMatch(source, /setState|dispatch|renderMarkdown|schedulePreview|renderEditorPreview/);
+  for (const persist of [false, true]) {
+    let measures = 0;
+    const applied = [];
+    const state = { fontFamily: 'system' };
+    const document = { documentElement: { style: { setProperty: (key, value) => applied.push([key, value]) } } };
+    const fn = new Function('state', 'document', 'codeEditor', 'localStorage', 'normalizeFontFamily', 'fontFamilyCSS', 'syncFontFamilyOptions', 'window', 'showToast', 't', 'reportSilentError', `${source}; return setFontFamily;`)(
+      state, document, { requestMeasure: () => { measures++; } }, { setItem() {} }, value => value, value => value,
+      () => {}, { quilliteMarkdown: { setFontFamily: async value => value } }, () => {}, value => value, () => {}
+    );
+    for (const preset of ['system', 'sans', 'serif', 'rounded', 'songti', 'kaiti']) {
+      assert.equal(await fn(preset, true, persist), preset);
+      assert.deepEqual(applied.at(-1), ['--app-font-family', preset]);
+    }
+    assert.equal(measures, persist ? 12 : 6);
+  }
+  // Preferences load before the editor's lazy initialization; this must remain safe.
+  const fn = new Function('state', 'document', 'codeEditor', 'localStorage', 'normalizeFontFamily', 'fontFamilyCSS', 'syncFontFamilyOptions', `${source}; return setFontFamily;`)(
+    {}, { documentElement: { style: { setProperty() {} } } }, null, { setItem() {} }, value => value, value => value, () => {}
+  );
+  assert.equal(await fn('serif', true, false), 'serif');
 });
 
 test('large settings use adaptive cascading submenus without removing their existing controls', () => {
@@ -306,7 +333,7 @@ test('plain text files render without Markdown parsing and edit without Markdown
   assert.match(renderer, /function isPlainTextFile\(path\)/);
   assert.match(renderer, /return \/\\\.txt\$\/i\.test\(path \|\| ''\)/);
   assert.match(renderer, /if \(isPlainTextFile\(doc\.path\)\) \{\s*container\.innerHTML = `<div class="plain-text">\$\{escapeHtml\(content\)\}<\/div>`;/);
-  assert.match(renderer, /const language = isPlainTextFile\(state\.currentFile\?\.path\)\s*\? \[\]\s*: \[markdown\(\), syntaxHighlighting\(markdownHighlightStyle\)\]/);
+  assert.match(renderer, /const language = isPlainTextFile\(state\.currentFile\?\.path\)\s*\? \[\]\s*: \[markdown\(\), syntaxHighlighting\(markdownHighlightStyle\), embeddedImagePreview, imagePreviewContext\.of\(/);
   assert.doesNotMatch(renderer, /editorExtensions = \[\s*basicSetup,\s*markdown\(\)/);
   assert.match(styles, /\.plain-text \{ white-space: pre-wrap; overflow-wrap: break-word; font-family: "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace;/);
   assert.match(styles, /\.plain-text \{[^}]*font-size: calc\(15px \* var\(--font-scale\)\);/);
@@ -358,10 +385,11 @@ test('images support links, asset imports, drag and paste, and display scaling',
   assert.match(renderer, /function imageMarkdown\(imagePath, description, width = preferredImageWidth\(\)\)/);
   assert.match(renderer, /width="\$\{normalizedWidth\}%">`/);
   assert.match(renderer, /function insertLocalImage\(\)/);
-  assert.match(renderer, /window\.quilliteMarkdown\.selectImage\(state\.currentFile\.path\)/);
+  assert.match(renderer, /window\.quilliteMarkdown\.selectImage\(path\)/);
   assert.match(renderer, /async function importAndInsertImage\(sourcePath, description = ''\)/);
-  assert.match(renderer, /window\.quilliteMarkdown\.importImage\(state\.currentFile\.path, sourcePath\)/);
-  assert.match(renderer, /window\.quilliteMarkdown\.savePastedImage\(state\.currentFile\.path, await fileAsDataURL\(file\)\)/);
+  assert.match(renderer, /window\.quilliteMarkdown\.importImage\(path, sourcePath\)/);
+  assert.match(renderer, /window\.quilliteMarkdown\.savePastedImage\(path, await fileAsDataURL\(file\)\)/);
+  assert.match(renderer, /session !== state\.documentSession \|\| path !== state\.currentFile\?\.path/);
   assert.match(renderer, /codeEditor\.contentDOM\.addEventListener\('paste', handleEditorPaste\)/);
   assert.match(renderer, /if \(state\.editing && IMAGE_FILE_PATTERN\.test\(filePath\)\)/);
   assert.match(renderer, /\$\('#pickLocalImage'\)\.addEventListener\('click', \(\) => \{ closeImageDialog\(\); insertLocalImage\(\); \}\)/);

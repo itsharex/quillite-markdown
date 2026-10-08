@@ -1,0 +1,26 @@
+/* Unicode ranges keep Chinese selections from replacing Latin glyphs, and vice versa.
+   Fonts are resolved locally; unavailable faces fall through to the app font. */
+@font-face { font-family: "Quillite Chinese sans"; src: local("Microsoft YaHei"), local("PingFang SC"), local("Noto Sans CJK SC"); unicode-range: U+2E80-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF, U+20000-323AF; }
+@font-face { font-family: "Quillite Chinese songti"; src: local("SimSun"), local("Songti SC"), local("STSong"), local("Noto Serif CJK SC"); unicode-range: U+2E80-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF, U+20000-323AF; }
+@font-face { font-family: "Quillite Chinese kaiti"; src: local("KaiTi"), local("Kaiti SC"), local("STKaiti"); unicode-range: U+2E80-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF, U+20000-323AF; }
+@font-face { font-family: "Quillite Chinese rounded"; src: local("YouYuan"), local("Yuanti SC"); unicode-range: U+2E80-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF, U+20000-323AF; }
+@font-face { font-family: "Quillite English arial"; src: local("Arial"), local("Helvetica Neue"), local("Liberation Sans"); unicode-range: U+0000-024F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF; }
+@font-face { font-family: "Quillite English georgia"; src: local("Georgia"), local("Liberation Serif"); unicode-range: U+0000-024F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF; }
+@font-face { font-family: "Quillite English times"; src: local("Times New Roman"), local("Times"), local("Liberation Serif"); unicode-range: U+0000-024F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF; }
+@font-face { font-family: "Quillite English verdana"; src: local("Verdana"), local("DejaVu Sans"); unicode-range: U+0000-024F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF; }
+@font-face { font-family: "Quillite Chinese mono"; src: local("NSimSun"), local("Noto Sans Mono CJK SC"), local("SimSun"), local("Songti SC"); unicode-range: U+2E80-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF, U+20000-323AF; }
+@font-face { font-family: "Quillite English mono"; src: local("Cascadia Code"), local("Consolas"), local("Menlo"), local("DejaVu Sans Mono"); unicode-range: U+0000-024F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF; }
+
+.typography-dialog { position: fixed; inset: auto 18px 18px auto; z-index: 1000; margin: 0; width: min(340px, calc(100vw - 36px)); max-height: calc(100dvh - 64px); overflow: auto; box-sizing: border-box; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); color: var(--text); box-shadow: 0 12px 44px rgba(0, 0, 0, .18); }
+.typography-dialog h2 { margin: 0 38px 12px 0; font-size: 22px; }
+.typography-hint { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.typography-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin: 16px 0; }
+.typography-fields label { display: flex; flex-direction: column; gap: 8px; color: var(--muted); font-size: 12px; }
+.typography-fields select { width: 100%; height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
+.typography-fields label:last-child { grid-column: 1 / -1; }
+.typography-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.typography-actions .large-button { min-width: 0; padding: 9px 12px; }
+.typography-actions button:first-child { margin-right: auto; }
+.typography-dialog button:disabled { opacity: .6; cursor: wait; }
+.typography-error { color: var(--danger, #b54242); font-size: 12px; }
+@media (max-width: 480px) { .typography-fields { grid-template-columns: minmax(0, 1fr); } .typography-dialog { padding: 22px; } }

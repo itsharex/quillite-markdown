@@ -19,7 +19,8 @@ function harness() {
     window: { quilliteMarkdown: { saveFile: () => write.promise, saveAs: () => { calls.push('saveAs'); return write.promise; } } },
     editorContent: () => state.currentFile.content,
     addRecentDocument: () => calls.push('recent'), refreshLibraryAfterReplacement: async () => {},
-    syncDocumentAccessControls() {}, renderCurrentDocument() {},
+    syncDocumentAccessControls() {}, syncDocumentIdentity() {}, renderCurrentDocument() {},
+    codeEditor: null,
     renderEditorPreview: content => calls.push(['preview', content]), renderFileList() {},
     setDirty: value => { state.dirty = value; }, pathIsInsideRoot: () => false,
     t: key => key, showToast: key => calls.push(key), reportSilentError() {}, console: { error() {} },
@@ -99,6 +100,39 @@ test('a successful unchanged save acknowledges its snapshot', async () => {
   await saving;
   assert.equal(state.savedContent, 'old');
   assert.equal(state.dirty, false);
+});
+
+test('saving always re-enables the filename control after the save finishes',async()=>{
+ const {context,state,write}=harness();
+ let disabled=false;
+ context.syncDocumentIdentity=()=>{disabled=Boolean(state.saving);};
+ const saving=context.saveDocument(); write.resolve({path:'/a.md',name:'a.md',content:'old'}); await saving;
+ assert.equal(disabled,false);
+});
+
+test('first manual save opens naming dialog while autosave retains draft identity', async () => {
+  for (const auto of [false, true]) {
+    const { context, state, write, calls } = harness();
+    state.currentFile.draft = true;
+    const saving = context.saveDocument(false, { auto });
+    assert.equal(calls.includes('saveAs'), !auto);
+    write.resolve(null);
+    await saving;
+    assert.equal(state.currentFile.draft, true);
+    assert.equal(state.currentFile.content, 'old');
+    assert.equal(state.dirty, true);
+  }
+});
+
+test('cross-directory copy rebases later edits but retains the committed baseline', async () => {
+  const { context, state, write } = harness();
+  const saving = context.saveDocument(true);
+  state.currentFile.content = 'old plus later edit';
+  write.resolve({ path: '/copy.md', name: 'copy.md', sourceContent: 'old', content: 'rebased old', rebaseContent: text => `rebased ${text}` });
+  await saving;
+  assert.equal(state.savedContent, 'rebased old');
+  assert.equal(state.currentFile.content, 'rebased old plus later edit');
+  assert.equal(state.dirty, true);
 });
 
 test('library refresh cannot overwrite edits or the next document save status', async () => {

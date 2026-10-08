@@ -1,3 +1,5 @@
+import { sourceLines } from './source-lines.js';
+
 export const FLOWCHART_DIRECTIONS = ['LR', 'TD', 'RL', 'BT'];
 
 export const FLOWCHART_SHAPES = [
@@ -222,7 +224,7 @@ export function removeFlowchartEdge(model, edgeId) {
 export function findCanvasDiagramFenceAt(source, position) {
   const text = String(source || '');
   const target = Math.max(0, Math.min(text.length, Number(position) || 0));
-  const lines = text.match(/.*(?:\r\n|\n|$)/gu) || [];
+  const lines = sourceLines(text);
   let offset = 0;
   let opening = null;
 

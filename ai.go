@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/zalando/go-keyring"
@@ -58,7 +58,7 @@ const (
 // returns a result or the network/API reports an actual failure.
 var (
 	aiHTTPClient    = &http.Client{}
-	errAIEmptyReply = errors.New("the AI service returned an empty message")
+	errAIEmptyReply = errors.New("AI_EMPTY_REPLY: the AI service returned an empty message")
 )
 
 type aiCredentialStore interface {
@@ -877,13 +877,18 @@ func (a *App) CancelAIDocumentReview() {
 }
 
 func (a *App) RewriteWithAI(input AIRewriteRequest) (AIRewriteResponse, error) {
+	protected, images, imageErr := protectAIEmbeddedImages(input.Text)
+	if imageErr != nil {
+		return AIRewriteResponse{}, imageErr
+	}
+	input.Text = protected
 	text := strings.TrimSpace(input.Text)
 	action := strings.ToLower(strings.TrimSpace(input.Action))
 	if text == "" && action != "custom" {
 		return AIRewriteResponse{}, errors.New("select some text before using AI")
 	}
-	if len([]rune(text)) > maxAITotalCharacters {
-		return AIRewriteResponse{}, errors.New("the selected text is too long to process safely")
+	if utf8.RuneCountInString(text) > maxAITotalCharacters {
+		return AIRewriteResponse{}, errors.New("AI_INPUT_TOO_LARGE: maximum supported AI input is 2,000,000 characters")
 	}
 	settings, err := a.GetAISettings()
 	if err != nil {
@@ -907,6 +912,10 @@ func (a *App) RewriteWithAI(input AIRewriteRequest) (AIRewriteResponse, error) {
 		return AIRewriteResponse{}, err
 	}
 	output = cleanAIOutput(output)
+	output, err = restoreAIEmbeddedImages(output, images)
+	if err != nil {
+		return AIRewriteResponse{}, err
+	}
 	if output == "" {
 		return AIRewriteResponse{}, errors.New("the AI service returned an empty result")
 	}
@@ -915,12 +924,17 @@ func (a *App) RewriteWithAI(input AIRewriteRequest) (AIRewriteResponse, error) {
 }
 
 func (a *App) ReviewDocumentWithAI(input AIDocumentReviewRequest) (AIDocumentReviewResponse, error) {
+	protected, images, imageErr := protectAIEmbeddedImages(input.Text)
+	if imageErr != nil {
+		return AIDocumentReviewResponse{}, imageErr
+	}
+	input.Text = protected
 	text := strings.TrimSpace(input.Text)
 	if text == "" {
 		return AIDocumentReviewResponse{}, errors.New("the document is empty")
 	}
-	if len([]rune(input.Text)) > maxAITotalCharacters {
-		return AIDocumentReviewResponse{}, errors.New("the document is too long to review safely")
+	if utf8.RuneCountInString(input.Text) > maxAITotalCharacters {
+		return AIDocumentReviewResponse{}, errors.New("AI_INPUT_TOO_LARGE: maximum supported AI input is 2,000,000 characters")
 	}
 	if len([]rune(input.Instruction)) > 1000 {
 		return AIDocumentReviewResponse{}, errors.New("the review instruction is too long")
@@ -938,6 +952,32 @@ func (a *App) ReviewDocumentWithAI(input AIDocumentReviewRequest) (AIDocumentRev
 	review, err := a.reviewAIChunks(ctx, settings, model, input)
 	if errors.Is(err, context.Canceled) {
 		return AIDocumentReviewResponse{}, errors.New("AI request cancelled")
+	}
+	if err == nil {
+		var restoredBytes int64
+		for _, suggestion := range review.Suggestions {
+			for _, text := range []string{suggestion.Original, suggestion.Replacement, suggestion.Reason} {
+				size, sizeErr := restoredAIImageSize(text, images)
+				if sizeErr != nil {
+					return AIDocumentReviewResponse{}, sizeErr
+				}
+				restoredBytes += size
+				if restoredBytes > maxSupportedDocumentBytes {
+					return AIDocumentReviewResponse{}, errors.New("AI_RESPONSE_TOO_LARGE: restored review exceeds document limit")
+				}
+			}
+		}
+		for index := range review.Suggestions {
+			s := &review.Suggestions[index]
+			s.Original, err = restoreAIEmbeddedImages(s.Original, images)
+			if err != nil {
+				return AIDocumentReviewResponse{}, err
+			}
+			s.Replacement, err = restoreAIEmbeddedImages(s.Replacement, images)
+			if err != nil {
+				return AIDocumentReviewResponse{}, err
+			}
+		}
 	}
 	return review, err
 }
@@ -1221,64 +1261,18 @@ func (a *App) callOpenAICompatibleStreamWithKey(ctx context.Context, baseURL, mo
 	}
 
 	if !strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
-		return decodeAIChatResponse(response.Body)
+		output, decodeErr := decodeAIChatResponse(response.Body)
+		if !errors.Is(decodeErr, errAIEmptyReply) {
+			return output, decodeErr
+		}
+		_ = response.Body.Close()
+		return a.callOpenAICompatibleWithSystemKey(ctx, baseURL, model, key, systemPrompt, prompt)
 	}
 
-	var combined strings.Builder
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 64*1024), 8<<20)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
-			break
-		}
-		if data == "" {
-			continue
-		}
-		var event struct {
-			Choices []struct {
-				Delta struct {
-					Content json.RawMessage `json:"content"`
-					Text    json.RawMessage `json:"text"`
-				} `json:"delta"`
-				Message struct {
-					Content json.RawMessage `json:"content"`
-					Text    json.RawMessage `json:"text"`
-				} `json:"message"`
-				Text json.RawMessage `json:"text"`
-			} `json:"choices"`
-		}
-		if json.Unmarshal([]byte(data), &event) != nil || len(event.Choices) == 0 {
-			continue
-		}
-		raw := event.Choices[0].Delta.Content
-		if len(raw) == 0 {
-			raw = event.Choices[0].Delta.Text
-		}
-		if len(raw) == 0 {
-			raw = event.Choices[0].Message.Content
-		}
-		if len(raw) == 0 {
-			raw = event.Choices[0].Message.Text
-		}
-		if len(raw) == 0 {
-			raw = event.Choices[0].Text
-		}
-		part, decodeErr := decodeAIMessageContent(raw)
-		if decodeErr != nil || part == "" {
-			continue
-		}
-		combined.WriteString(part)
+	output, streamErr := decodeAIEventStream(response.Body, func(part string) {
 		a.emitAIRewriteChunk(AIRewriteChunk{RequestID: requestID, Text: part})
-	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read AI response stream: %w", err)
-	}
-	if strings.TrimSpace(combined.String()) == "" {
+	})
+	if errors.Is(streamErr, errAIEmptyReply) {
 		// Several OpenAI-compatible gateways advertise SSE but only produce
 		// usage/finish events for streamed requests. Retry once without streaming
 		// so summaries and edits still work instead of surfacing a false empty
@@ -1293,39 +1287,119 @@ func (a *App) callOpenAICompatibleStreamWithKey(ctx context.Context, baseURL, mo
 		}
 		return fallback, nil
 	}
-	return combined.String(), nil
+	return output, streamErr
 }
 
 func decodeAIChatResponse(reader io.Reader) (string, error) {
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content          json.RawMessage `json:"content"`
-				ReasoningContent string          `json:"reasoning_content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	data, err := io.ReadAll(io.LimitReader(reader, 8<<20))
+	data, err := readAIResponse(reader)
 	if err != nil {
-		return "", fmt.Errorf("read AI response: %w", err)
+		return "", err
 	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return "", fmt.Errorf("the AI service returned an unreadable response: %w", err)
+	result, err := decodeAIChatData(data)
+	if err != nil {
+		return "", err
+	}
+	return result.answerText()
+}
+
+func decodeAIChatData(data []byte) (aiChatResponse, error) {
+	var result aiChatResponse
+	if len(data) > maxAIResponseBytes {
+		return result, errAIResponseTooLarge
+	}
+	if json.Unmarshal(data, &result) == nil {
+		return result, nil
+	}
+	// Some gateways send SSE even when stream=false, with a role-only first
+	// event. Read all answer events instead of accepting that first empty event.
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		text, err := decodeAIEventStream(bytes.NewReader(data), nil)
+		if err != nil {
+			return result, err
+		}
+		content, _ := json.Marshal(text)
+		return aiChatResponse{Choices: []aiChatChoice{{Message: aiChatMessage{Content: content}}}}, nil
+	}
+	start, end := bytes.IndexByte(data, '{'), bytes.LastIndexByte(data, '}')
+	if start >= 0 && end > start && json.Unmarshal(data[start:end+1], &result) == nil {
+		return result, nil
+	}
+	return result, errors.New("the AI service returned an unreadable response")
+}
+
+type aiChatMessage struct {
+	Content json.RawMessage `json:"content"`
+	Text    json.RawMessage `json:"text"`
+	Refusal string          `json:"refusal"`
+}
+
+type aiChatChoice struct {
+	Message      aiChatMessage   `json:"message"`
+	Delta        aiChatMessage   `json:"delta"`
+	Text         json.RawMessage `json:"text"`
+	FinishReason string          `json:"finish_reason"`
+}
+
+type aiChatResponse struct {
+	Choices []aiChatChoice  `json:"choices"`
+	Error   json.RawMessage `json:"error"`
+}
+
+func (choice aiChatChoice) answerText() (string, error) {
+	if choice.FinishReason == "length" {
+		return "", errors.New("AI_OUTPUT_TRUNCATED: the model reached its output limit before completing the answer")
+	}
+	if choice.FinishReason == "content_filter" || choice.Message.Refusal != "" || choice.Delta.Refusal != "" {
+		return "", errors.New("AI_CONTENT_FILTERED: the provider declined to return an answer")
+	}
+	if choice.FinishReason != "" && choice.FinishReason != "stop" && choice.FinishReason != "tool_calls" && choice.FinishReason != "function_call" {
+		return "", errAIResponseIncomplete
+	}
+	var whitespace string
+	for _, raw := range []json.RawMessage{choice.Delta.Content, choice.Delta.Text, choice.Message.Content, choice.Message.Text, choice.Text} {
+		text, err := decodeAIMessageContent(raw)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(text) != "" {
+			return text, nil
+		}
+		if whitespace == "" {
+			whitespace = text
+		}
+	}
+	// Reasoning fields are not a completed answer and must never be inserted
+	// into the document when the provider has produced no final content.
+	return whitespace, nil
+}
+
+func (result aiChatResponse) answerText() (string, error) {
+	if result.hasError() {
+		return "", errAIProviderFailure
 	}
 	if len(result.Choices) == 0 {
 		return "", errors.New("the AI service returned no choices")
 	}
-	content, err := decodeAIMessageContent(result.Choices[0].Message.Content)
+	// A valid JSON document containing only a streamed delta is still not a
+	// complete answer, even if a gateway mislabeled it as application/json.
+	if result.Choices[0].FinishReason == "" {
+		for _, raw := range []json.RawMessage{result.Choices[0].Delta.Content, result.Choices[0].Delta.Text} {
+			if delta, err := decodeAIMessageContent(raw); err != nil || strings.TrimSpace(delta) != "" {
+				return "", errAIResponseIncomplete
+			}
+		}
+	}
+	text, err := result.Choices[0].answerText()
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(content) == "" {
-		content = result.Choices[0].Message.ReasoningContent
-	}
-	if strings.TrimSpace(content) == "" {
+	if strings.TrimSpace(text) == "" {
 		return "", errAIEmptyReply
 	}
-	return content, nil
+	return text, nil
 }
 
 func (a *App) callOpenAICompatibleWithSystem(ctx context.Context, provider, baseURL, model, systemPrompt, prompt string) (string, error) {
@@ -1344,31 +1418,11 @@ func (a *App) callOpenAICompatibleWithSystemKey(ctx context.Context, baseURL, mo
 		"model":    model,
 		"messages": []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": prompt}},
 	}
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content          json.RawMessage `json:"content"`
-				ReasoningContent string          `json:"reasoning_content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
+	var result aiChatResponse
 	if err := a.postAIJSON(ctx, baseURL+"/chat/completions", key, payload, &result); err != nil {
 		return "", err
 	}
-	if len(result.Choices) == 0 {
-		return "", errors.New("the AI service returned no choices")
-	}
-	content, err := decodeAIMessageContent(result.Choices[0].Message.Content)
-	if err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(content) == "" {
-		content = result.Choices[0].Message.ReasoningContent
-	}
-	if strings.TrimSpace(content) == "" {
-		return "", errAIEmptyReply
-	}
-	return content, nil
+	return result.answerText()
 }
 
 func aiLongRunningContext() context.Context {
@@ -1438,9 +1492,16 @@ func (a *App) postAIJSON(ctx context.Context, endpoint, apiKey string, payload a
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return aiHTTPStatusError(response)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+	data, err := readAIResponse(response.Body)
 	if err != nil {
-		return fmt.Errorf("read AI response: %w", err)
+		return err
+	}
+	if chat, ok := result.(*aiChatResponse); ok {
+		decoded, err := decodeAIChatData(data)
+		if err == nil {
+			*chat = decoded
+		}
+		return err
 	}
 	if err := json.Unmarshal(data, result); err == nil {
 		return nil

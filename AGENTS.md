@@ -6,7 +6,7 @@
 
 - 项目名称：轻阅 Markdown / Quillite Markdown
 - 仓库：`https://github.com/liuhang798/quillite-markdown`
-- 当前版本：`2.7.5`
+- 当前版本：`2.7.6`
 - 开源协议：MIT
 - 产品定位：极度轻量、美观、跨平台的 Markdown 阅读与编辑工具
 - 支持平台：Windows x64、macOS Universal、Linux x64
@@ -159,10 +159,12 @@ app.go / updates.go（Go 后端）
 - `lastFile`：最近一个文档。
 - `language`：`zh-CN` 或 `en`。
 - `fontFamily`：软件字体预设，支持 `system`、`sans`、`serif`、`rounded`、`songti`、`kaiti`；缺失或非法值回退为 `system`。
+- `bodyTypography`：保存兼容旧版的中文/英文字体对和公式字号，默认 `follow` / `follow` / `standard`；前端映射为 11 种正文风格，旧自定义搭配原样保留。Unicode 本地字体别名隔离中英字形，两侧共用 `--body-font-family`；公式只缩放，不能替换 KaTeX 字体。非模态浮动面板用 CSS 在实际文档临时预览，保存成功才更新偏好；关闭/Escape/保存失败恢复已保存显示，不修改正文、撤回历史或唤醒隐藏预览。
 - `lastUpdateCheck`：上次更新检查时间。
 - `suppressUpdateUntil`：暂停自动更新提醒的截止时间。
 - `usageAnalytics`：是否允许软件异常时自动回传已清理的错误日志；不控制每日活跃统计。
-- `imageUploadMode`：`local`、`picgo-cloud` 或 `picgo`；分别表示本地 `assets`、PicGo Cloud API 直连和本机 PicGo Server，默认继续使用本地 `assets`。
+- `imageUploadMode`：`local`、`embedded`、`picgo-cloud` 或 `picgo`；分别表示本地 `assets`、内嵌 Base64、PicGo Cloud API 直连和本机 PicGo Server，默认继续使用本地 `assets`。
+- `lastSaveDirectory`：上次用户选定的保存目录，仅用于选择器默认位置，不能授予删除或覆盖权限。
 - `picGoServerUrl`：PicGo 本地 HTTP 服务地址，仅允许 localhost／回环 IP；可选服务密钥独立保存在用户配置目录，不进入偏好 JSON。
 - `exportSettings`：本机 Pandoc 路径与最多 24 条导出预设；旧偏好缺失时使用空设置。
 - `anonymousInstallId`：本地随机匿名标识，仅用于每日活跃按设备去重；服务器只保存不可逆哈希。
@@ -276,11 +278,14 @@ ECharts 使用修复版 6.1+，预览和导出均显式使用 `echarts/theme/v5`
 1. `NewFile` 使用 `O_CREATE|O_EXCL` 创建带时间戳的唯一文件。
 2. 新文件路径同时记录到内存和 `Preferences.draftFiles`，因此重启后仍能识别。
 3. 自动保存只更新该草稿，不取消草稿身份。
+   首次手动保存走原生另存选择器，由用户确定名称和位置。跨目录另存时仅改新副本中的图片引用，原文件与附件不移动、不删除。`SaveDocumentCopy` 必须 create-only，重名拒绝而非覆盖。
 4. “另存为”成功且新旧路径不同时，只迁移草稿身份和最近记录；原草稿文件必须保留，由用户自行决定是否删除。
 5. 返回 `Document.replacedPath`，前端立即删除对应列表项。
 6. 普通已有文档永远不能被上述清理逻辑删除。
 
 ### 本地图片
+
+内嵌模式只接受经实际 MIME 校验的 PNG/JPEG/WebP/GIF/BMP，不创建或清理附件；单图 25 MiB，文档 64 MiB。便携 Markdown 导出创建新副本，不覆盖原文档，在线/缺失/复杂引用应中止并提示，不能默默输出不完整副本。AI 请求在前后端均隔离图片编码，恢复总量也必须受限。重命名只改同目录文件名、核验修订、create-only 移动，并保留原历史文件。
 
 WebView 会限制直接访问 `file://` 图片。Markdown 源码仍保存正常的绝对或相对路径，但预览时必须调用 `ReadImageData`，由 Go 读取文件并返回 base64 data URL。不要重新改回直接设置 `file:///...`。
 

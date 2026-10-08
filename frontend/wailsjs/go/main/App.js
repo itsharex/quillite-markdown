@@ -30,6 +30,10 @@ export function CheckForUpdates(arg1) {
   return window['go']['main']['App']['CheckForUpdates'](arg1);
 }
 
+export function ChooseDocumentSavePath(arg1) {
+  return window['go']['main']['App']['ChooseDocumentSavePath'](arg1);
+}
+
 export function ClearRecoverySnapshot() {
   return window['go']['main']['App']['ClearRecoverySnapshot']();
 }
@@ -72,6 +76,10 @@ export function ExportPDF(arg1, arg2, arg3, arg4, arg5) {
 
 export function ExportPlainHTML(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ExportPlainHTML'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function ExportPortableMarkdown(arg1, arg2) {
+  return window['go']['main']['App']['ExportPortableMarkdown'](arg1, arg2);
 }
 
 export function ExportWithPandoc(arg1) {
@@ -202,12 +210,20 @@ export function ReadImageData(arg1, arg2) {
   return window['go']['main']['App']['ReadImageData'](arg1, arg2);
 }
 
+export function ReadPortableImage(arg1, arg2) {
+  return window['go']['main']['App']['ReadPortableImage'](arg1, arg2);
+}
+
 export function RemoveFavorite(arg1) {
   return window['go']['main']['App']['RemoveFavorite'](arg1);
 }
 
 export function RemoveRecent(arg1) {
   return window['go']['main']['App']['RemoveRecent'](arg1);
+}
+
+export function RenameDocument(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RenameDocument'](arg1, arg2, arg3);
 }
 
 export function ReorderPinnedRecent(arg1) {
@@ -240,6 +256,10 @@ export function SaveConflictCopy(arg1, arg2) {
 
 export function SaveDiagnosticReport(arg1) {
   return window['go']['main']['App']['SaveDiagnosticReport'](arg1);
+}
+
+export function SaveDocumentCopy(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveDocumentCopy'](arg1, arg2, arg3);
 }
 
 export function SaveExportImage(arg1, arg2, arg3, arg4) {
@@ -288,6 +308,10 @@ export function SelectPandoc() {
 
 export function SetAISettings(arg1) {
   return window['go']['main']['App']['SetAISettings'](arg1);
+}
+
+export function SetBodyTypography(arg1) {
+  return window['go']['main']['App']['SetBodyTypography'](arg1);
 }
 
 export function SetDefaultAIProvider(arg1, arg2) {

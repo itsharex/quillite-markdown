@@ -1,6 +1,8 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import 'katex/dist/katex.min.css';
+import './body-typography.css';
+import { applyBodyTypography, normalizeBodyTypography, readBodyTypography, bodyStyleFor, typographyForStyle } from './body-typography.js';
 import hljs from 'highlight.js/lib/common';
 import { cancelMermaidRendering, convertMermaidDiagramsToImages, refreshMermaidDiagrams, renderMermaidDiagrams } from './mermaid-diagrams.js';
 import { convertEChartsDiagramsToImages, refreshEChartsDiagrams, releaseEChartsDiagrams, renderEChartsDiagrams, validateEChartsSource } from './echarts-diagrams.js';
@@ -9,6 +11,9 @@ import { FLOWCHART_SHAPES, addFlowchartEdge, addFlowchartNode, layoutFlowchart, 
 import { hasStructuredVisualEditor, parseStructuredDiagram, serializeStructuredDiagram, structuredDiagramDefinition } from './structured-diagram-editor.js';
 import { findEditableDiagramFenceAt, diagramReplacementMarkdown } from './diagram-editing.js';
 import { aiModelOptions } from './ai-model-options.js';
+import { exceedsAIInputLimit, protectEmbeddedImages, aiInputCharacterCount } from './ai-input.js';
+import { transformMarkdownImages } from './portable-images.js';
+import { normalizeImageRows } from './image-layout.js';
 import { deleteAIModelCache, readAIModelCache, writeAIModelCache } from './ai-model-cache.js';
 import { ACCENT_THEMES, normalizeAccentTheme, normalizeColorMode, readAppearanceStorage, resolveMacColorMode, temporaryMacColorModeAfterToggle } from './appearance.js';
 import { previewWheelZoomDirection } from './font-wheel-zoom.js';
@@ -45,10 +50,13 @@ const EXPORT_FORMAT_DESCRIPTIONS = {
   docx: 'exportDescriptionDocx', html: 'exportDescriptionHtml', 'html-plain': 'exportDescriptionHtmlPlain',
   pdf: 'exportDescriptionPdf', png: 'exportDescriptionPng', jpeg: 'exportDescriptionJpeg', epub: 'exportDescriptionEpub',
   rtf: 'exportDescriptionRtf', odt: 'exportDescriptionOdt', latex: 'exportDescriptionLatex',
-  mediawiki: 'exportDescriptionMediawiki', custom: 'exportDescriptionCustom'
+  mediawiki: 'exportDescriptionMediawiki', custom: 'exportDescriptionCustom', 'markdown-portable': 'exportDescriptionPortable'
 };
 const NEW_FILE_COOLDOWN_MS = 3000;
 let codeEditor;
+let embeddedImagePreview;
+let imagePreviewContext;
+let updateImagePreviewDirectory;
 let editorExtensions = [];
 let basicSetup;
 let Compartment;
@@ -231,6 +239,7 @@ const state = {
   fontScale: initialFontScale.scale,
   fontScaleMode: initialFontScale.mode,
   fontFamily: normalizeFontFamily(localStorage.getItem('fontFamily')),
+  bodyTypography: readBodyTypography(localStorage),
   docWidth: normalizeDocWidth(localStorage.getItem('docWidth')),
   editorLayout: normalizeEditorLayout(localStorage.getItem('editorLayout')),
   lastSplitLayout: localStorage.getItem('lastSplitLayout') === 'editor-left' ? 'editor-left' : 'preview-left',
@@ -317,13 +326,16 @@ function isExpectedOperationalError(error, source) {
   )) return true;
   if (source.startsWith('document.export-') && (
     message.includes('export_document_too_large') || message.includes('export_source_document_too_large')
+    || isExportAccessDeniedError(error)
   )) return true;
   if (source.startsWith('ai.') && (
     message.includes('http 401') || message.includes('unauthorized') || message.includes('authentication fail')
     || message.includes('invalid api key') || message.includes('api key is required')
     || (message.includes('api key') && message.includes('invalid'))
+    || message.includes('ai_input_too_large') || message.includes('too long to process safely')
+    || message.includes('too long to review safely')
   )) return true;
-  if (source.startsWith('document.open') && (message.includes('cannot find the file') || message.includes('no such file'))) return true;
+  if (source.startsWith('document.open') && (isMissingDocumentError(error) || message.includes('document_too_large'))) return true;
   return false;
 }
 
@@ -351,6 +363,11 @@ function isExportFileInUseError(error) {
   return message.includes('EXPORT_FILE_IN_USE');
 }
 
+function isExportAccessDeniedError(error) {
+  const message = diagnosticErrorMessage(error).toLowerCase();
+  return message.includes('permission denied') || message.includes('access is denied') || message.includes('operation not permitted');
+}
+
 function isExportTooLargeError(error) {
   return diagnosticErrorMessage(error).includes('EXPORT_DOCUMENT_TOO_LARGE');
 }
@@ -373,6 +390,8 @@ window.addEventListener('unhandledrejection', event => reportSilentError(event.r
 
 const translations = {
   'zh-CN': {
+    bodyStyle: '正文风格', bodyStyleDefault: '默认（跟随软件）', bodyStyleModern: '现代简洁', bodyStyleClear: '清晰易读', bodyStyleBook: '书籍阅读', bodyStyleClassic: '经典文档', bodyStyleLiterary: '文艺随笔', bodyStyleHandwritten: '手写气息', bodyStyleGentle: '柔和圆润', bodyStyleMagazine: '杂志风格', bodyStyleTechnical: '技术文档', bodyStyleMono: '等宽正文', bodyStyleLegacy: '原有自定义搭配',
+bodyTypography: '正文与公式设置', bodyChineseFont: '中文正文字体', bodyEnglishFont: '英文正文字体', fontFollowApp: '跟随软件字体', bodyFontSans: '无衬线（微软雅黑 / 苹方）', bodyFontArial: 'Arial（无衬线）', bodyFontGeorgia: 'Georgia（衬线）', bodyFontTimes: 'Times New Roman（衬线）', bodyFontVerdana: 'Verdana（无衬线）', formulaTextSize: '公式字号', formulaSizeSmall: '小', formulaSizeStandard: '标准', formulaSizeLarge: '大', typographyHint: '切换后直接预览当前文档；保存后记忆，取消恢复原设置。左右正文同步，界面与代码不变。', typographyFallbackHint: '使用本机字体，未安装时自动回退；公式保留 KaTeX 数学字体，仅调整大小。', typographySample: '混合文字与公式预览', typographyReset: '恢复默认', typographySaved: '正文与公式设置已保存', typographySaveFailed: '设置保存失败，已恢复原有显示，请重试。',
     documentTools: '文档工具',
     conflictDraftStale: '当前编辑或磁盘版本已变化，之前的合并草稿已过期。是否丢弃旧草稿，基于当前编辑重新合并？取消会保留旧草稿，但不会应用。',
     conflictTitle: '文档发生冲突', conflictHint: '磁盘文件已变化，自动保存已暂停。对比后选择保留、另存或手动合并；不会自动覆盖。',
@@ -408,7 +427,7 @@ const translations = {
     exportCenter: '导出中心', exportFormatsCount: '12 种导出格式', exportEyebrow: '导出', exportCenterHint: '选择用途和格式，轻阅会自动采用合适的导出设置。', exportCategoryDocument: '文档', exportCategoryWeb: '网页', exportCategoryImage: '图片', exportAdvancedFormats: '更多专业格式', exportAdvancedHint: '需要 Pandoc', exportPreset: '导出预设', currentExportSettings: '当前设置', presetName: '预设名称', presetNamePlaceholder: '例如：公众号长图', savePreset: '保存预设', deletePreset: '删除', exportFormat: '导出格式', exportFormatWord: 'Word 文档', exportFormatStyledHTML: '带样式网页', exportFormatPlainHTML: '无样式网页', exportFormatPDF: '系统打印', exportFormatPNG: '高清图片', exportFormatJPEG: '压缩图片', exportFormatEPUB: '电子书', exportFormatRTF: '富文本', exportFormatODT: '开放文档', exportFormatLatex: '排版源码', exportFormatCustom: '自定义格式', exportHeaderFooter: '页眉与页脚', exportVariablesHint: '支持 {title}、{date}、{page}', exportHeader: '页眉', exportFooter: '页脚', exportHeaderPlaceholder: '例如：{title}', exportFooterPlaceholder: '例如：第 {page} 页', exportHeaderFooterHint: 'PDF 会重复显示在每页；其他格式显示在文档开头和结尾。', imageExportOptions: '图片选项', imageResolution: '清晰度', pandocNotDetected: '尚未检测到 Pandoc', pandocDetected: '已检测到 {version}', pandocPathPlaceholder: '自动检测或选择 pandoc', pandocSetupHint: '此格式需要 Pandoc。轻阅会先自动检测；没有安装时再选择安装或指定文件。', detectPandoc: '重新检测', selectPandoc: '选择文件', installPandoc: '安装 Pandoc ↗', pandocWriter: '输出 writer', fileExtension: '文件扩展名', pandocArguments: '自定义 Pandoc 命令参数', pandocSecurityHint: '参数直接传给 Pandoc，不经过系统 shell；输出路径始终由保存窗口决定。', exportNow: '立即导出', exporting: '正在生成，请稍候…', exportingImageSlices: '正在生成图片：{current}/{total}', exportSucceeded: '文档已导出', exportFailed: '导出失败', pandocRequired: '此格式需要先安装或选择 Pandoc', presetSaved: '导出预设已保存', presetDeleted: '导出预设已删除', presetNameRequired: '请输入预设名称', imageExportTooTall: '文档过长，无法生成图片，请缩短文档后重试', imageExportBlank: '图片渲染异常，未保存空白图片；请重试', exportDescriptionDocx: '保留标题、表格、代码、公式与图片，可继续编辑。', exportDescriptionHtml: '独立网页，保留当前主题、代码高亮与文档样式。', exportDescriptionHtmlPlain: '仅输出语义化 HTML，不附带主题或排版 CSS。', exportDescriptionPdf: '通过系统打印生成 PDF。', exportDescriptionPng: '自动以 2× 清晰度生成便于阅读的连续 PNG 图片。', exportDescriptionJpeg: '自动以 2× 清晰度生成体积更小的连续 JPEG 图片。', exportDescriptionEpub: '通过 Pandoc 生成适合电子阅读器的 EPUB 电子书。', exportDescriptionRtf: '通过 Pandoc 生成可由多数文字处理软件打开的 RTF。', exportDescriptionOdt: '通过 Pandoc 生成 LibreOffice 等支持的开放文档。', exportDescriptionLatex: '通过 Pandoc 生成可继续排版的 LaTeX 源文件。', exportDescriptionMediawiki: '通过 Pandoc 转换为 MediaWiki 标记文本。', exportDescriptionCustom: '指定 Pandoc writer 和扩展名，导出自定义格式。',
     imageOutputMode: '输出方式', imageOutputPages: 'A4 高清分页（推荐）', imageOutputLong: '单张长图（仅适合短文档）', imageOutputHint: '按 A4 高度逐页独立渲染，文字不会被整张缩小；选择单张长图时，超过 3 页的长文档也会自动改为 A4 高清分页。', exportingImagePages: '正在生成 A4 高清图片：{current}/{total}', longImageAutoPaged: '文档过长，已自动改为 {count} 张 A4 高清图片，避免整张缩小后模糊',
     languageChanged: '界面语言已切换为简体中文', about: '关于', aboutProductLabel: 'MARKDOWN 阅读与编辑器',
-    aboutVersion: '版本 2.7.5', aboutDescription: '一款专注、美观、跨平台的 Markdown 阅读与编辑工具，支持实时预览、语法高亮、目录导航、最近阅读和文档收藏。',
+    aboutVersion: '版本 2.7.6', aboutDescription: '一款专注、美观、跨平台的 Markdown 阅读与编辑工具，支持实时预览、语法高亮、目录导航、最近阅读和文档收藏。',
     authorEmail: '作者邮箱', officialWebsite: '官方网站', openSourceAddress: '开源地址', aboutLicense: '基于 MIT 许可证开源', done: '完成',
     usageAnalytics: '参与产品改进计划', usageAnalyticsDescription: '此开关仅控制异常回传。勾选后，软件发生异常时会静默提交已清理的错误日志。无论是否勾选，每天最多提交一次匿名活跃记录；不会上传文档内容、文件名、文件路径或联系方式。', usageAnalyticsEnabled: '已参与产品改进计划', usageAnalyticsDisabled: '已关闭异常自动回传', usageAnalyticsSaveFailed: '无法保存产品改进计划设置',
     feedback: '意见反馈', feedbackShortHint: '建议与异常', feedbackLabel: '帮助我们改进', feedbackTitle: '意见反馈', feedbackIntro: '告诉我们你的建议或遇到的问题。邮箱和手机均为选填，仅用于需要进一步确认时联系你。', feedbackType: '反馈类型', feedbackFeature: '功能建议', feedbackFeatureHint: '希望新增或优化的功能', feedbackBug: '功能异常', feedbackBugHint: '功能无法使用或结果不正确', feedbackDescription: '反馈说明', feedbackDescriptionPlaceholder: '请描述期望效果、操作步骤或异常现象', feedbackEmail: '联系邮箱（选填）', feedbackPhone: '手机号码（选填）', feedbackPhonePlaceholder: '用于必要时联系', feedbackImages: '上传图片（选填）', feedbackImagesHint: '最多 5 张，支持 PNG、JPG、WebP；每张不超过 5 MB', selectImages: '选择图片', removeImage: '移除图片', softwareVersion: '软件版本', systemVersion: '系统版本', feedbackPrivacy: '提交后，以上反馈内容、联系方式、所选图片及版本信息将发送到轻阅官网服务器；服务器会记录请求 IP 并解析所在城市，不会上传当前文档。', submitFeedback: '提交反馈', feedbackSubmitting: '正在提交反馈…', feedbackSubmitted: '感谢反馈，我们会认真查看', feedbackSubmitFailed: '反馈提交失败', feedbackImageSelectFailed: '无法选择反馈图片', feedbackNeedDescription: '请至少填写 5 个字的反馈说明',
@@ -427,6 +446,8 @@ const translations = {
     resizeSidebar: '拖动调整文档库宽度', resizeToc: '拖动调整目录宽度', resizeEditor: '拖动调整预览宽度'
   },
   en: {
+    bodyStyle: 'Body style', bodyStyleDefault: 'Default (follow app)', bodyStyleModern: 'Modern', bodyStyleClear: 'Clear & readable', bodyStyleBook: 'Book reading', bodyStyleClassic: 'Classic document', bodyStyleLiterary: 'Literary', bodyStyleHandwritten: 'Handwritten feel', bodyStyleGentle: 'Soft & rounded', bodyStyleMagazine: 'Magazine', bodyStyleTechnical: 'Technical', bodyStyleMono: 'Monospaced prose', bodyStyleLegacy: 'Previous custom pairing',
+    bodyTypography: 'Body & math typography', bodyChineseFont: 'Chinese body font', bodyEnglishFont: 'English body font', fontFollowApp: 'Follow app font', bodyFontSans: 'Sans serif (YaHei / PingFang)', bodyFontArial: 'Arial (sans serif)', bodyFontGeorgia: 'Georgia (serif)', bodyFontTimes: 'Times New Roman (serif)', bodyFontVerdana: 'Verdana (sans serif)', formulaTextSize: 'Math size', formulaSizeSmall: 'Small', formulaSizeStandard: 'Standard', formulaSizeLarge: 'Large', typographyHint: 'Preview directly in your document. Save to remember; cancel to restore. Editor and preview stay in sync; UI and code are unchanged.', typographyFallbackHint: 'Uses local fonts with automatic fallback when unavailable. Formulas retain KaTeX math fonts; only their size changes.', typographySample: 'Mixed text and math preview', typographyReset: 'Reset defaults', typographySaved: 'Body and math settings saved', typographySaveFailed: 'Could not save settings. The previous display is unchanged; please retry.',
     documentTools: 'Document tools',
     conflictDraftStale: 'The editor or disk version changed. Discard the outdated merge draft and start from current edits? Cancel keeps the draft without applying it.',
     conflictTitle: 'Document conflict', conflictHint: 'The file changed on disk. Autosave is paused. Compare and keep, save a copy, or merge manually. Nothing is overwritten automatically.',
@@ -462,7 +483,7 @@ const translations = {
     exportCenter: 'Export center', exportFormatsCount: '12 export formats', exportEyebrow: 'EXPORT', exportCenterHint: 'Choose a purpose and format. Quillite applies suitable export settings automatically.', exportCategoryDocument: 'Documents', exportCategoryWeb: 'Web', exportCategoryImage: 'Images', exportAdvancedFormats: 'More professional formats', exportAdvancedHint: 'Requires Pandoc', exportPreset: 'Export preset', currentExportSettings: 'Current settings', presetName: 'Preset name', presetNamePlaceholder: 'For example: Social image', savePreset: 'Save preset', deletePreset: 'Delete', exportFormat: 'Export format', exportFormatWord: 'Word document', exportFormatStyledHTML: 'Styled webpage', exportFormatPlainHTML: 'Unstyled webpage', exportFormatPDF: 'System print', exportFormatPNG: 'High-resolution images', exportFormatJPEG: 'Compressed images', exportFormatEPUB: 'E-book', exportFormatRTF: 'Rich text', exportFormatODT: 'Open document', exportFormatLatex: 'Typesetting source', exportFormatCustom: 'Custom format', exportHeaderFooter: 'Header and footer', exportVariablesHint: 'Supports {title}, {date}, and {page}', exportHeader: 'Header', exportFooter: 'Footer', exportHeaderPlaceholder: 'For example: {title}', exportFooterPlaceholder: 'For example: Page {page}', exportHeaderFooterHint: 'PDF repeats these on every page; other formats place them at the beginning and end.', imageExportOptions: 'Image options', imageResolution: 'Resolution', pandocNotDetected: 'Pandoc has not been detected', pandocDetected: 'Detected {version}', pandocPathPlaceholder: 'Detect or select pandoc', pandocSetupHint: 'This format requires Pandoc. Quillite detects it automatically; install it or choose the executable only when needed.', detectPandoc: 'Detect again', selectPandoc: 'Choose file', installPandoc: 'Install Pandoc ↗', pandocWriter: 'Output writer', fileExtension: 'File extension', pandocArguments: 'Custom Pandoc arguments', pandocSecurityHint: 'Arguments are passed directly to Pandoc without a system shell; the save dialog always controls the output path.', exportNow: 'Export now', exporting: 'Generating, please wait…', exportingImageSlices: 'Rendering images: {current}/{total}', exportSucceeded: 'Document exported', exportFailed: 'Export failed', pandocRequired: 'Install or select Pandoc before exporting this format', presetSaved: 'Export preset saved', presetDeleted: 'Export preset deleted', presetNameRequired: 'Enter a preset name', imageExportTooTall: 'This document is too long to export as images. Shorten it and try again.', imageExportBlank: 'Image rendering failed, so the blank file was not saved. Please try again.', exportDescriptionDocx: 'Preserves headings, tables, code, formulas, and images in an editable document.', exportDescriptionHtml: 'A standalone webpage that preserves the current theme, code highlighting, and document styling.', exportDescriptionHtmlPlain: 'Semantic HTML only, without theme or typography CSS.', exportDescriptionPdf: 'Uses system printing to create a PDF.', exportDescriptionPng: 'Automatically creates readable PNG pages at 2× resolution.', exportDescriptionJpeg: 'Automatically creates smaller JPEG pages at 2× resolution.', exportDescriptionEpub: 'Uses Pandoc to create an EPUB for e-book readers.', exportDescriptionRtf: 'Uses Pandoc to create an RTF supported by most word processors.', exportDescriptionOdt: 'Uses Pandoc to create an open document for LibreOffice and similar apps.', exportDescriptionLatex: 'Uses Pandoc to create editable LaTeX typesetting source.', exportDescriptionMediawiki: 'Uses Pandoc to convert the document to MediaWiki markup.', exportDescriptionCustom: 'Choose a Pandoc writer and extension for a custom format.',
     imageOutputMode: 'Output mode', imageOutputPages: 'A4 HD pages (recommended)', imageOutputLong: 'Single long image (short documents only)', imageOutputHint: 'Each A4-height page is rendered independently so text is never shrunk with the entire document. Long images over three pages automatically switch to A4 HD pages.', exportingImagePages: 'Rendering A4 HD image: {current}/{total}', longImageAutoPaged: 'This document is long, so it was exported as {count} A4 HD images to prevent fit-to-screen blur',
     languageChanged: 'Interface language changed to English', about: 'About', aboutProductLabel: 'MARKDOWN READER & EDITOR',
-    aboutVersion: 'Version 2.7.5', aboutDescription: 'A focused, beautiful, cross-platform Markdown reader and editor with live preview, syntax highlighting, navigation, recent reading, and document favorites.',
+    aboutVersion: 'Version 2.7.6', aboutDescription: 'A focused, beautiful, cross-platform Markdown reader and editor with live preview, syntax highlighting, navigation, recent reading, and document favorites.',
     authorEmail: 'Author email', officialWebsite: 'Official website', openSourceAddress: 'Open-source repository', aboutLicense: 'Open source under the MIT License', done: 'Done',
     usageAnalytics: 'Join the product improvement program', usageAnalyticsDescription: 'This switch controls error reporting only. When enabled, sanitized error logs are submitted silently after failures. One anonymous daily-active event is submitted at most once per day regardless of this setting; document content, file names, paths, and contact details are never uploaded.', usageAnalyticsEnabled: 'Product improvement program enabled', usageAnalyticsDisabled: 'Automatic error reporting disabled', usageAnalyticsSaveFailed: 'Unable to save the product improvement setting',
     feedback: 'Feedback', feedbackShortHint: 'Ideas & issues', feedbackLabel: 'HELP US IMPROVE', feedbackTitle: 'Send Feedback', feedbackIntro: 'Tell us what you would like improved or what went wrong. Email and phone are optional and used only if we need to follow up.', feedbackType: 'Feedback type', feedbackFeature: 'Feature suggestion', feedbackFeatureHint: 'A new feature or an improvement', feedbackBug: 'Functional issue', feedbackBugHint: 'Something does not work as expected', feedbackDescription: 'Description', feedbackDescriptionPlaceholder: 'Describe the expected result, steps, or issue', feedbackEmail: 'Email (optional)', feedbackPhone: 'Phone (optional)', feedbackPhonePlaceholder: 'Only for necessary follow-up', feedbackImages: 'Images (optional)', feedbackImagesHint: 'Up to 5 PNG, JPG, or WebP images; 5 MB each', selectImages: 'Choose images', removeImage: 'Remove image', softwareVersion: 'App version', systemVersion: 'System version', feedbackPrivacy: 'Submitting sends this feedback, optional contact details, selected images, and version information to the Quillite website server. The server records the request IP and resolves its city. Your current document is never uploaded.', submitFeedback: 'Submit feedback', feedbackSubmitting: 'Submitting feedback…', feedbackSubmitted: 'Thank you. We will review your feedback.', feedbackSubmitFailed: 'Unable to submit feedback', feedbackImageSelectFailed: 'Unable to choose feedback images', feedbackNeedDescription: 'Enter at least 5 characters',
@@ -601,7 +622,17 @@ Object.assign(translations['zh-CN'], {
   aiChunkProcessing: '正在处理第 {chunk}/{total} 段', aiChunkRetrying: '第 {chunk}/{total} 段失败，正在自动重试',
   aiPrivacyCheckTitle: '发送前隐私检查', aiPrivacySendSummary: '{provider} · {model} · {count} 个字符', aiPrivacyNone: '未发现常见敏感信息。发送前仍建议确认文档内容。', aiPrivacyFound: '发现 {count} 项可能的敏感信息，已选择脱敏 {selected} 项。取消选择后将发送原值。', aiPrivacyRedact: '发送时脱敏', aiPrivacyTypeApiKey: '密钥', aiPrivacyTypeEmail: '邮箱', aiPrivacyTypeIdNumber: '身份证号', aiPrivacyTypePhone: '手机号', aiPrivacyTypeBankCard: '银行卡号',
   documentHistory: '历史版本', documentHistoryLabel: '本地版本历史', documentHistoryTitle: '文档历史版本', documentHistoryIntro: '保存前的文档版本会安全保留在本机，可查看差异并恢复为可编辑内容。', documentHistoryVersions: '历史记录', documentHistorySelectTitle: '选择一个历史版本', documentHistorySelectHint: '右侧将显示历史内容与当前文档的差异。', documentHistoryEmpty: '暂时没有历史版本', documentHistoryRestore: '恢复此版本', documentHistoryRestored: '历史版本已恢复到编辑器，保存后才会写入原文件', documentHistoryLoadFailed: '无法读取文档历史版本', documentHistoryChanged: '当前文档已经切换，无法恢复此版本', documentHistoryCurrent: '当前文档', documentHistoryOlder: '历史版本', documentHistoryDifference: '与当前文档相比：增加 {added} 行，删除 {removed} 行', documentHistorySize: '{size} KB',
-  aiReviewTooLong: '当前文档超过 200 万字符，请缩小文档后再检查'
+  aiReviewTooLong: '当前文档超过 200 万字符，请缩小文档后再检查',
+  aiInputTooLong: 'AI 单次支持最多 200 万字符。请选中需要处理的章节，或拆分文档后再生成总结。',
+  aiEmptyReplyHint: 'AI 服务未返回正文。请重试，或在设置中选择其他文本模型并测试连接。',
+  aiTruncatedReplyHint: '模型达到输出上限，未完成回答。请缩小处理范围，或选择支持更长输出的模型。',
+  aiFilteredReplyHint: 'AI 平台未允许返回此内容。请调整要求或联系平台查看限制。',
+  aiIncompleteReplyHint: 'AI 响应不完整或格式异常，已停止处理，部分结果不会应用到文档。请重试。',
+  aiResponseTooLargeHint: 'AI 响应超过 8 MiB 安全上限，已停止处理。请缩小处理范围或目标篇幅。',
+  aiProviderFailureHint: 'AI 平台在生成过程中报告错误，部分结果不会应用到文档。请重试或检查平台服务状态。',
+  exportAccessDenied: '无法写入导出文件。请关闭 Word 等正在使用该文件的程序，或选择有写入权限的文件夹和新文件名。原文件已保留。',
+  documentTooLarge: '文件超过 64 MiB 支持上限。请先拆分文件后再打开，原文件未更改。',
+  conflictFileMissing: '磁盘文件已移动或删除。当前编辑内容已保留，自动保存已暂停；请另存为新副本。'
 });
 
 Object.assign(translations.en, {
@@ -609,7 +640,17 @@ Object.assign(translations.en, {
   aiChunkProcessing: 'Processing section {chunk} of {total}', aiChunkRetrying: 'Section {chunk} of {total} failed; retrying automatically',
   aiPrivacyCheckTitle: 'Privacy check before sending', aiPrivacySendSummary: '{provider} · {model} · {count} characters', aiPrivacyNone: 'No common sensitive data was detected. Review the content before sending.', aiPrivacyFound: '{count} potentially sensitive items found; {selected} will be redacted. Clear an item to send its original value.', aiPrivacyRedact: 'Redact when sending', aiPrivacyTypeApiKey: 'API key', aiPrivacyTypeEmail: 'Email', aiPrivacyTypeIdNumber: 'ID number', aiPrivacyTypePhone: 'Phone', aiPrivacyTypeBankCard: 'Bank card',
   documentHistory: 'Version history', documentHistoryLabel: 'LOCAL VERSION HISTORY', documentHistoryTitle: 'Document version history', documentHistoryIntro: 'Versions from before each save are kept locally so you can compare and restore them as editable content.', documentHistoryVersions: 'Versions', documentHistorySelectTitle: 'Select a version', documentHistorySelectHint: 'Its content and difference from the current document will appear here.', documentHistoryEmpty: 'No earlier versions yet', documentHistoryRestore: 'Restore this version', documentHistoryRestored: 'The version was restored in the editor. Save to write it to the document.', documentHistoryLoadFailed: 'Unable to load document history', documentHistoryChanged: 'The active document changed, so this version cannot be restored', documentHistoryCurrent: 'Current document', documentHistoryOlder: 'Earlier version', documentHistoryDifference: 'Compared with the current document: {added} lines added, {removed} removed', documentHistorySize: '{size} KB',
-  aiReviewTooLong: 'This document exceeds 2,000,000 characters. Reduce its size before checking it.'
+  aiReviewTooLong: 'This document exceeds 2,000,000 characters. Reduce its size before checking it.',
+  aiInputTooLong: 'AI supports up to 2,000,000 characters per operation. Select the sections to process or split the document before summarizing.',
+  aiEmptyReplyHint: 'The AI service returned no answer text. Retry, or select another text model and test its connection in Settings.',
+  aiTruncatedReplyHint: 'The model reached its output limit before completing the answer. Reduce the selection or choose a model with a larger output limit.',
+  aiFilteredReplyHint: 'The AI provider declined to return this content. Adjust the request or check the provider restrictions.',
+  aiIncompleteReplyHint: 'The AI response was incomplete or malformed. Processing stopped and partial output will not be applied. Please retry.',
+  aiResponseTooLargeHint: 'The AI response exceeded the 8 MiB safety limit. Reduce the selection or target length.',
+  aiProviderFailureHint: 'The AI provider reported an error during generation. Partial output will not be applied. Retry or check the provider status.',
+  exportAccessDenied: 'Cannot write the export file. Close Word or other apps using it, or choose a writable folder and a new file name. The existing file has been preserved.',
+  documentTooLarge: 'This file exceeds the 64 MiB limit. Split it before opening. The original file is unchanged.',
+  conflictFileMissing: 'The disk file was moved or deleted. Your edits are retained and autosave is paused. Save a new copy.'
 });
 
 const codeMirrorTranslations = {
@@ -626,6 +667,22 @@ const codeMirrorTranslations = {
 function editorLanguageExtension() {
   return EditorState.phrases.of(codeMirrorTranslations[state.language] || codeMirrorTranslations.en);
 }
+
+Object.assign(translations['zh-CN'], {
+  renameDocument: '修改文件名', renameDocumentHint: '仅修改文件名，不修改正文标题。不会覆盖同名文件；取消不影响文档。', documentFileName: '文件名（包含扩展名）', renameDone: '文件名已修改', renameFailed: '无法修改文件名，原内容已保留', nameInvalid: '请输入有效文件名，保留 .md 或 .txt 等支持的扩展名；不能包含路径或系统保留名称', nameUnchanged: '文件名未改变', copyExists: '目标文件已存在，请选择新名称；不会覆盖已有文件', documentLocation: '保存位置', draftLocation: '草稿位置 · 首次保存请选择名称和位置', authoringDesktop: '此操作需要桌面版',
+  embeddedImagesMode: '内嵌 Base64', embeddedImagesHint: '图片直接存入 Markdown，单文件分享；编码约增加 33% 体积', imageEmbedded: '图片已内嵌到文档', imageEmbedType: '内嵌支持 PNG、JPEG、WebP、GIF、BMP；请确认图片格式', exportFormatPortable: '便携 Markdown', exportDescriptionPortable: '把本地图片内嵌到新 .md 文件，保留原文档和附件。在线图片请先转为本地；部分阅读器可能不支持内嵌图片。', portableTooLarge: '内嵌后超过 64 MiB 上限，请压缩图片或拆分文档', portableRemote: '文档含在线图片或不支持的图片数据，无法生成独立副本。请先转为本地图片；不会自动下载', portableImageLimit: '单次最多内嵌 256 种本地图片，请拆分文档', portableMissing: '图片无法读取，已停止生成便携副本，请检查附件', portableUnsupported: '图片包含 srcset 等复杂引用，请先改为普通图片再导出', exportFormatsCount: '13 种导出格式', imageUploadSettings: '图片存储与图床', imageUploadSettingsHint: '选择图片保存方式；本地附件和内嵌图片无需配置图床。', imageDialogHint: '选择本地图片或粘贴在线链接；本地图片按“图片存储与图床”设置保存。'
+});
+Object.assign(translations.en, {
+  renameDocument: 'Rename file', renameDocumentHint: 'Changes only the file name, not headings. Existing files are never overwritten; Cancel leaves the document unchanged.', documentFileName: 'File name (including extension)', renameDone: 'File renamed', renameFailed: 'Unable to rename; document contents retained', nameInvalid: 'Enter a valid file name with a supported extension such as .md or .txt. Paths and reserved system names are not allowed.', nameUnchanged: 'The file name is unchanged', copyExists: 'The destination already exists. Choose a new name; existing files are never overwritten.', documentLocation: 'Saved in', draftLocation: 'Draft location · Choose name and location on first save', authoringDesktop: 'This action requires the desktop app.',
+  embeddedImagesMode: 'Embedded Base64', embeddedImagesHint: 'Stores images inside Markdown for single-file sharing; encoding adds about 33% size.', imageEmbedded: 'Image embedded in the document', imageEmbedType: 'Embedding supports PNG, JPEG, WebP, GIF and BMP. Check the image format.', exportFormatPortable: 'Portable Markdown', exportDescriptionPortable: 'Embeds local images into a new .md file; originals and attachments stay intact. Convert online images to local files first. Some readers may not support embedded images.', portableTooLarge: 'The embedded document exceeds 64 MiB. Compress images or split the document.', portableRemote: 'Online images or unsupported image data prevent a standalone copy. Convert them to local images first. Nothing is downloaded automatically.', portableImageLimit: 'At most 256 distinct local images can be embedded per export. Split the document.', portableMissing: 'An image could not be read. Portable export stopped; check the attachments.', portableUnsupported: 'Complex image references such as srcset are not supported. Use ordinary images before exporting.', exportFormatsCount: '13 export formats', imageUploadSettings: 'Image storage and hosting', imageUploadSettingsHint: 'Choose how images are stored. Local attachments and embedded images need no image host.', imageDialogHint: 'Choose a local image or paste an online link. Local images follow your Image storage and hosting settings.'
+});
+
+Object.assign(translations['zh-CN'], { renameRecordsWarning: '文件已重命名，但部分文档记录或历史版本未迁移；原备份仍保留。', embeddedImagesDetail: '支持 PNG、JPEG、WebP、GIF、BMP，单张最多 25 MiB，文档最多 64 MiB。只内嵌本地或剪贴板图片，不自动下载在线图片；部分阅读器不支持此方式。', imageStorageLabel: '本地 / 内嵌 / 图床' });
+Object.assign(translations.en, { renameRecordsWarning: 'The file was renamed, but some library records or versions could not migrate. Original backups remain intact.', embeddedImagesDetail: 'PNG, JPEG, WebP, GIF and BMP; up to 25 MiB per image and 64 MiB per document. Only local/clipboard images are embedded; online images are not downloaded automatically. Some readers do not support this format.', imageStorageLabel: 'Local / Inline / Host' });
+Object.assign(translations['zh-CN'], { saveRecordsWarning: '新文件已保存，但文档库记录未完全更新；原草稿和备份仍保留。' });
+Object.assign(translations.en, { saveRecordsWarning: 'The new file was saved, but library records could not fully update. The original draft and backups remain intact.' });
+Object.assign(translations['zh-CN'], { renameKeepFormat: '这里只修改文件名，不能切换 Markdown／纯文本类型；请保留原文件扩展名。' });
+Object.assign(translations.en, { renameKeepFormat: 'Renaming cannot switch between Markdown and plain text. Keep the original file extension.' });
 
 function t(key, values = {}) {
   let template = translations[state.language]?.[key] ?? translations['zh-CN'][key] ?? key;
@@ -698,6 +755,7 @@ function setLanguage(language, silent = false, persist = true) {
     renderFileList();
   }
   setDirty(state.dirty);
+  syncDocumentIdentity();
   if (!silent) showToast(t('languageChanged'), 'success');
   return persistence;
 }
@@ -788,8 +846,9 @@ function loadEditorDependencies() {
     import('@codemirror/search'),
     import('@codemirror/language'),
     import('@codemirror/lang-markdown'),
-    import('@lezer/highlight')
-  ]).then(([codemirrorModule, stateModule, viewModule, commandsModule, searchModule, languageModule, markdownModule, highlightModule]) => {
+    import('@lezer/highlight'),
+    import('./embedded-image-preview.js')
+  ]).then(([codemirrorModule, stateModule, viewModule, commandsModule, searchModule, languageModule, markdownModule, highlightModule, imagePreviewModule]) => {
     basicSetup = codemirrorModule.basicSetup;
     Compartment = stateModule.Compartment;
     StateEffect = stateModule.StateEffect;
@@ -809,6 +868,10 @@ function loadEditorDependencies() {
     syntaxHighlighting = languageModule.syntaxHighlighting;
     markdown = markdownModule.markdown;
     tags = highlightModule.tags;
+    embeddedImagePreview = imagePreviewModule.embeddedImagePreview;
+    imagePreviewContext = imagePreviewModule.imagePreviewContext;
+    updateImagePreviewDirectory = imagePreviewModule.updateImagePreviewDirectory;
+    Object.assign(codeMirrorTranslations['zh-CN'], imagePreviewModule.imagePreviewPhrases);
     editorLanguage = new Compartment();
     markdownHighlightStyle = createMarkdownHighlightStyle();
     initializeSpellcheckExtension();
@@ -827,7 +890,7 @@ function isPlainTextFile(path) {
 function createEditorState(content = '', moveToStart = true) {
   const language = isPlainTextFile(state.currentFile?.path)
     ? []
-    : [markdown(), syntaxHighlighting(markdownHighlightStyle)];
+    : [markdown(), syntaxHighlighting(markdownHighlightStyle), embeddedImagePreview, imagePreviewContext.of({ directory: state.currentFile?.directory || '', readImageData: (ref, directory) => window.quilliteMarkdown.readImageData(ref, directory) })];
   return EditorState.create({
     doc: content,
     selection: { anchor: moveToStart ? 0 : content.length },
@@ -3079,7 +3142,7 @@ function saveVisualTable() {
 }
 
 function applyImageUploadSettings(settings) {
-  state.imageUploadMode = ['picgo-cloud', 'picgo'].includes(settings?.mode) ? settings.mode : 'local';
+  state.imageUploadMode = ['embedded', 'picgo-cloud', 'picgo'].includes(settings?.mode) ? settings.mode : 'local';
   state.picGoServerURL = String(settings?.serverUrl || 'http://127.0.0.1:36677');
   state.picGoHasSecret = Boolean(settings?.hasSecret);
 	state.picGoCloudHasToken = Boolean(settings?.hasCloudToken);
@@ -3087,7 +3150,7 @@ function applyImageUploadSettings(settings) {
 
 function selectedImageUploadMode() {
 	const mode = document.querySelector('input[name="imageUploadMode"]:checked')?.value;
-	return ['picgo-cloud', 'picgo'].includes(mode) ? mode : 'local';
+	return ['embedded', 'picgo-cloud', 'picgo'].includes(mode) ? mode : 'local';
 }
 
 function currentImageUploadSettingsInput() {
@@ -3123,6 +3186,7 @@ function updatePicGoSettingsAvailability() {
 	els.picGoCloudSetup.classList.toggle('hidden', !cloudEnabled);
 	els.picGoSetupWizard.classList.toggle('hidden', !localPicGoEnabled);
 	els.localAssetsSummary.classList.toggle('hidden', mode !== 'local');
+  $('#embeddedImagesSummary').classList.toggle('hidden', mode !== 'embedded');
 	$('#saveImageUploadSettings').disabled = (cloudEnabled && !state.picGoCloudConnectionReady) || (localPicGoEnabled && !state.picGoConnectionReady);
 	$('#testPicGo').disabled = !localPicGoEnabled;
   setPicGoWizardStep(state.picGoSetupStep);
@@ -3358,7 +3422,8 @@ function finishImageUploadProgress(run, succeeded) {
 }
 
 function showImportedImageResult(result) {
-  if (result.uploaded) showToast(t('imageUploaded'), 'success');
+  if (/^data:image\//i.test(result.path)) showToast(t('imageEmbedded'), 'success');
+  else if (result.uploaded) showToast(t('imageUploaded'), 'success');
   else if (result.fallback) showToast(t('picGoUploadFailedFallback'), 'warning');
   else showToast(t('imageImported'), 'success');
 }
@@ -3418,22 +3483,28 @@ function imageMarkdown(imagePath, description, width = preferredImageWidth()) {
 
 function insertImageReference(imagePath, description, width = preferredImageWidth()) {
   const markdown = imageMarkdown(imagePath, description, width);
+  const document = editorContent();
+  if (/^data:image\//i.test(imagePath) && new TextEncoder().encode(document).length + new TextEncoder().encode(markdown).length > 64 * 1024 * 1024) { showToast(t('portableTooLarge'), 'warning'); return false; }
   replaceSelection(markdown, markdown.length, 0);
+  return true;
 }
 
 async function insertLocalImage() {
   if (!state.currentFile) return;
+  const session = state.documentSession, path = state.currentFile.path;
   try {
-    const imagePath = await window.quilliteMarkdown.selectImage(state.currentFile.path);
+    const imagePath = await window.quilliteMarkdown.selectImage(path);
     if (!imagePath) return;
+    if (session !== state.documentSession || path !== state.currentFile?.path || !state.editing) return;
     const result = await uploadedOrLocalImagePath(imagePath);
+    if (session !== state.documentSession || path !== state.currentFile?.path || !state.editing) return;
     const selected = els.imageAltInput.value.trim() || selectedImageAlt() || t('imageAlt');
-    insertImageReference(result.path, selected, updateImageWidthLabel());
+    if (!insertImageReference(result.path, selected, updateImageWidthLabel())) return;
     showImportedImageResult(result);
   } catch (error) {
     reportSilentError(error, 'image.select');
     console.error(error);
-    showToast(t('imageSelectFailed'), 'error');
+    showToast(String(error).includes('IMAGE_EMBED_TYPE') ? t('imageEmbedType') : t('imageSelectFailed'), 'error');
   }
 }
 
@@ -3456,17 +3527,20 @@ function imageDescriptionFromName(name) {
 
 async function importAndInsertImage(sourcePath, description = '') {
   if (!state.editing || !state.currentFile?.path || !sourcePath) return false;
+  const session = state.documentSession, path = state.currentFile.path;
   try {
-    const imagePath = await window.quilliteMarkdown.importImage(state.currentFile.path, sourcePath);
+    const imagePath = await window.quilliteMarkdown.importImage(path, sourcePath);
     if (!imagePath) return false;
+    if (session !== state.documentSession || path !== state.currentFile?.path || !state.editing) return false;
     const result = await uploadedOrLocalImagePath(imagePath);
-    insertImageReference(result.path, description || imageDescriptionFromName(sourcePath.split(/[\\/]/).pop()));
+    if (session !== state.documentSession || path !== state.currentFile?.path || !state.editing) return false;
+    if (!insertImageReference(result.path, description || imageDescriptionFromName(sourcePath.split(/[\\/]/).pop()))) return false;
     showImportedImageResult(result);
     return true;
   } catch (error) {
     reportSilentError(error, 'image.import');
     console.error(error);
-    showToast(t('imageSelectFailed'), 'error');
+    showToast(String(error).includes('IMAGE_EMBED_TYPE') ? t('imageEmbedType') : t('imageSelectFailed'), 'error');
     return false;
   }
 }
@@ -3482,6 +3556,7 @@ function fileAsDataURL(file) {
 
 async function handleEditorPaste(event) {
   if (!state.editing || !state.currentFile?.path) return;
+  const session = state.documentSession, path = state.currentFile.path;
   const item = [...(event.clipboardData?.items || [])].find(candidate => candidate.kind === 'file' && /^image\//i.test(candidate.type));
   const file = item?.getAsFile();
   const html = event.clipboardData?.getData('text/html') || '';
@@ -3500,16 +3575,18 @@ async function handleEditorPaste(event) {
   try {
     const sourcePath = window.quilliteMarkdown.pathForFile(file);
     const imagePath = sourcePath
-      ? await window.quilliteMarkdown.importImage(state.currentFile.path, sourcePath)
-      : await window.quilliteMarkdown.savePastedImage(state.currentFile.path, await fileAsDataURL(file));
+      ? await window.quilliteMarkdown.importImage(path, sourcePath)
+      : await window.quilliteMarkdown.savePastedImage(path, await fileAsDataURL(file));
     if (!imagePath) throw new Error('Pasted image returned no asset path');
+    if (session !== state.documentSession || path !== state.currentFile?.path || !state.editing) return;
     const result = await uploadedOrLocalImagePath(imagePath);
-    insertImageReference(result.path, imageDescriptionFromName(file.name));
+    if (session !== state.documentSession || path !== state.currentFile?.path || !state.editing) return;
+    if (!insertImageReference(result.path, imageDescriptionFromName(file.name))) return;
     showImportedImageResult(result);
   } catch (error) {
     reportSilentError(error, 'image.paste');
     console.error(error);
-    showToast(t('imagePasteFailed'), 'error');
+    showToast(String(error).includes('IMAGE_EMBED_TYPE') ? t('imageEmbedType') : t('imagePasteFailed'), 'error');
   }
 }
 
@@ -3531,7 +3608,7 @@ async function initializeCodeEditor() {
   ]);
     const editorTheme = EditorView.theme({
     '&': { height: '100%', backgroundColor: 'transparent', color: 'var(--text)' },
-    '.cm-scroller': { overflow: 'auto', fontFamily: '"Cascadia Code", "Microsoft YaHei UI", Consolas, monospace' },
+    '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--body-font-family, var(--app-font-family))' },
     '.cm-content': { padding: '24px 32px 60px', caretColor: 'var(--accent-strong)', lineHeight: '1.75' },
     '.cm-line': { padding: '0 4px' },
     '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent-strong)' },
@@ -4103,6 +4180,8 @@ function syncFontFamilyOptions() {
 async function setFontFamily(fontFamily, silent = false, persist = true) {
   state.fontFamily = normalizeFontFamily(fontFamily);
   document.documentElement.style.setProperty('--app-font-family', fontFamilyCSS(state.fontFamily));
+  // Refresh wrapping and cursor metrics without resetting the document or undo history.
+  codeEditor?.requestMeasure();
   localStorage.setItem('fontFamily', state.fontFamily);
   syncFontFamilyOptions();
   if (!persist) return state.fontFamily;
@@ -4111,6 +4190,7 @@ async function setFontFamily(fontFamily, silent = false, persist = true) {
     state.fontFamily = normalizeFontFamily(saved);
     localStorage.setItem('fontFamily', state.fontFamily);
     document.documentElement.style.setProperty('--app-font-family', fontFamilyCSS(state.fontFamily));
+    codeEditor?.requestMeasure();
     syncFontFamilyOptions();
     if (!silent) showToast(t('fontChanged'), 'success');
     return state.fontFamily;
@@ -4118,6 +4198,73 @@ async function setFontFamily(fontFamily, silent = false, persist = true) {
     reportSilentError(error, 'preferences.font-family');
     showToast(t('fontSaveFailed'), 'error');
     return state.fontFamily;
+  }
+}
+
+function syncBodyTypography(settings) {
+  state.bodyTypography = normalizeBodyTypography(settings);
+  applyBodyTypography(state.bodyTypography, document.documentElement.style, codeEditor);
+  try { localStorage.setItem('bodyTypography', JSON.stringify(state.bodyTypography)); }
+  catch (error) { reportSilentError(error, 'preferences.body-typography-cache'); }
+}
+
+function typographyFormSettings() {
+  return typographyForStyle($('#bodyStyle').value, $('#bodyFormulaSize').value, state.bodyTypography);
+}
+
+function updateTypographySample() {
+  // Temporary CSS preview on the actual document; no persistence or rendering.
+  applyBodyTypography(typographyFormSettings(), document.documentElement.style, codeEditor);
+}
+
+function fillTypographyForm(settings) {
+  const value = normalizeBodyTypography(settings);
+  const style = bodyStyleFor(value);
+  $('#bodyStyleLegacy').hidden = style !== 'legacy';
+  $('#bodyStyle').value = style;
+  $('#bodyFormulaSize').value = value.formulaSize;
+  updateTypographySample();
+}
+
+function openTypographySettings() {
+  closeMoreMenu();
+  const dialog = $('#typographyDialog');
+  if (dialog.open) return;
+  // Populate without modifying persisted preferences or the document.
+  fillTypographyForm(state.bodyTypography);
+  $('#typographySaveError').textContent = '';
+  dialog.show();
+}
+
+function closeTypographySettings() {
+  const dialog = $('#typographyDialog');
+  if (dialog.dataset.saving === 'true') return false;
+  // Native close is asynchronous; restore before another action can export or
+  // print temporary styles, rather than waiting for the close event.
+  applyBodyTypography(state.bodyTypography, document.documentElement.style, codeEditor);
+  if (dialog.open) dialog.close();
+  return true;
+}
+
+async function saveTypographySettings() {
+  const dialog = $('#typographyDialog');
+  if (dialog.dataset.saving === 'true') return;
+  const settings = typographyFormSettings();
+  dialog.dataset.saving = 'true';
+  dialog.querySelectorAll('button, select').forEach(element => { element.disabled = true; });
+  $('#typographySaveError').textContent = '';
+  try {
+    const saved = await window.quilliteMarkdown.setBodyTypography(settings);
+    syncBodyTypography(saved);
+    dialog.close();
+    showToast(t('typographySaved'), 'success');
+  } catch (error) {
+    applyBodyTypography(state.bodyTypography, document.documentElement.style, codeEditor);
+    reportSilentError(error, 'preferences.body-typography');
+    $('#typographySaveError').textContent = t('typographySaveFailed');
+  } finally {
+    dialog.dataset.saving = 'false';
+    dialog.querySelectorAll('button, select').forEach(element => { element.disabled = false; });
   }
 }
 
@@ -5197,7 +5344,7 @@ function restoreReusableEChartsDiagrams(container, reusable, themeKey) {
 }
 
 function applyMarkdownTableLayouts(container, layouts) {
-  const tables = [...container.querySelectorAll('table')];
+  const tables = [...container.querySelectorAll('table:not(.quillite-image-row)')];
   const usedTables = new Set();
   layouts.forEach((layout, index) => {
     if (!layout.hasWidthMetadata) return;
@@ -5252,6 +5399,7 @@ function renderMarkdownTo(container, doc, content) {
   // detached observers and makes typing/scrolling feel sluggish.
   releaseEChartsDiagrams(container);
   container.innerHTML = html;
+  normalizeImageRows(container);
   if (container === els.editorPreview && state.editing) {
     container.querySelectorAll('.math-inline, .math-block').forEach(formula => {
       formula.classList.add('editable-preview-formula');
@@ -5424,6 +5572,7 @@ function displayDocument(doc, { addToLibrary = true } = {}) {
   if (documentPerformanceProfile(doc.content.length).level === 'normal') renderEditorPreview(doc.content);
   else els.editorPreview.replaceChildren();
   els.editorFileName.textContent = doc.name;
+  syncDocumentIdentity();
   els.welcome.classList.add('hidden');
   els.editorView.classList.add('hidden');
   els.documentView.classList.remove('hidden');
@@ -5842,6 +5991,95 @@ async function toggleEditor(forceEditing) {
   }
 }
 
+function authoringError(error) {
+  const message = String(error?.message || error);
+  if (/DOCUMENT_COPY_EXISTS|already exists|file exists/i.test(message)) return t('copyExists');
+  if (message.includes('DOCUMENT_NAME_INVALID')) return t('nameInvalid');
+  if (message.includes('DOCUMENT_NAME_FORMAT')) return t('renameKeepFormat');
+  if (message.includes('DOCUMENT_NAME_UNCHANGED')) return t('nameUnchanged');
+  if (message.includes('DESKTOP_REQUIRED')) return t('authoringDesktop');
+  if (/PORTABLE_TOO_LARGE|DOCUMENT_TOO_LARGE/.test(message)) return t('portableTooLarge');
+  if (message.includes('PORTABLE_REMOTE_IMAGE')) return t('portableRemote');
+  if (message.includes('PORTABLE_IMAGE_LIMIT')) return t('portableImageLimit');
+  if (message.includes('PORTABLE_UNSUPPORTED_IMAGE')) return t('portableUnsupported');
+  if (message.includes('IMAGE_EMBED_TYPE')) return t('imageEmbedType');
+  if (message.includes('PORTABLE_IMAGE_MISSING')) return t('portableMissing');
+  return t('renameFailed');
+}
+
+function syncDocumentIdentity() {
+  const doc = state.currentFile, location = $('#editorDocumentLocation');
+  if (location) {
+    location.textContent = doc ? `${t(doc.draft ? 'draftLocation' : 'documentLocation')} · ${doc.directory}` : '';
+    location.title = doc?.path || '';
+  }
+  const rename = $('#renameDocumentButton');
+  if (rename) rename.disabled = !doc || doc.readOnly || state.saving;
+}
+
+let renameSession = null;
+function openRenameDocument() {
+  if (!state.currentFile || state.currentFile.readOnly || state.saving || state.documentConflict) return;
+  renameSession = { session: state.documentSession, path: state.currentFile.path, revision: state.currentFile.revision };
+  $('#renameDocumentName').value = state.currentFile.name;
+  $('#renameDocumentStatus').textContent = '';
+  $('#renameDocumentDialog').classList.remove('hidden');
+  document.body.classList.add('dialog-open');
+  requestAnimationFrame(() => { $('#renameDocumentName').focus(); $('#renameDocumentName').select(); });
+}
+
+function closeRenameDocument() {
+  if (state.saving) return;
+  $('#renameDocumentDialog').classList.add('hidden');
+  renameSession = null;
+  if (!document.querySelector('.dialog-backdrop:not(.hidden)')) document.body.classList.remove('dialog-open');
+  $('#renameDocumentButton').focus();
+}
+
+async function confirmRenameDocument() {
+  if (!renameSession || state.saving) return;
+  const request = renameSession;
+  if (request.session !== state.documentSession || request.path !== state.currentFile?.path) { closeRenameDocument(); return; }
+  state.saving = true;
+  $('#confirmRenameDocument').disabled = true;
+  $('#cancelRenameDocument').disabled = true;
+  try {
+    const renamed = await window.quilliteMarkdown.renameDocument(request.path, $('#renameDocumentName').value, request.revision);
+    if (request.session !== state.documentSession) return;
+    // Keep current edits, the saved baseline and undo history; only identity changes.
+    const content = state.editing ? editorContent() : state.currentFile.content;
+    state.currentFile = { ...renamed, content };
+    state.documentSession++;
+    const renamedSession = state.documentSession;
+    els.editorFileName.textContent = renamed.name;
+    updateWindowTitle();
+    syncDocumentIdentity();
+    resetDocumentSummary();
+    addRecentDocument(state.currentFile);
+    await refreshLibraryAfterReplacement(renamed);
+    if (renamedSession !== state.documentSession || state.currentFile?.path !== renamed.path) return;
+    if (pathIsInsideRoot(renamed.path)) await refreshExplorer();
+    if (renamedSession !== state.documentSession) return;
+    renderFileList();
+    if (!state.editing) renderCurrentDocument();
+    scheduleRecoverySnapshot();
+    showToast(t(renamed.warning ? 'renameRecordsWarning' : 'renameDone'), renamed.warning ? 'warning' : 'success');
+    state.saving = false;
+    closeRenameDocument();
+  } catch (error) {
+    if (request.session !== state.documentSession) return;
+    if (String(error).includes('DOCUMENT_CONFLICT')) {
+      state.saving = false; closeRenameDocument(); await openDocumentConflict();
+    } else $('#renameDocumentStatus').textContent = authoringError(error);
+  } finally {
+    state.saving = false;
+    $('#confirmRenameDocument').disabled = false;
+    $('#cancelRenameDocument').disabled = false;
+    if (renameSession && request.session !== state.documentSession) closeRenameDocument();
+    syncDocumentIdentity();
+  }
+}
+
 function resetDocumentConflict() {
   state.documentConflict = null;
   $('#documentConflictDialog').classList.add('hidden');
@@ -5888,7 +6126,7 @@ async function openDocumentConflict() {
     if (!current()) return;
     conflict.disk = null;
     conflict.mergedRevision = '';
-    $('#documentConflictStatus').textContent = t('conflictUnavailable');
+    $('#documentConflictStatus').textContent = t(isMissingDocumentError(error) ? 'conflictFileMissing' : 'conflictUnavailable');
   }
 }
 
@@ -5981,8 +6219,10 @@ async function saveDocument(saveAs = false, options = {}) {
   }
   if (state.saveAsRequired && options.auto) return;
   if (state.saveAsRequired && !options.auto && !options.conflictRevision) saveAs = true;
+  if (state.currentFile.draft && !options.auto) saveAs = true;
   const editingContent = state.editing ? editorContent() : state.currentFile.content;
   const originalPath = state.currentFile.path;
+  const originalDirectory = state.currentFile.directory;
   const requestedSession = state.documentSession;
   const isCurrentSession = () => requestedSession === state.documentSession && Boolean(state.currentFile);
   let fallbackToSaveAs = false;
@@ -5995,21 +6235,31 @@ async function saveDocument(saveAs = false, options = {}) {
     if (!isCurrentSession()) return;
     // Fail closed if a backend ever returns a reread/external buffer instead
     // of the save receipt. Do not adopt its revision or clear our backup.
-    if (saved.content !== editingContent) throw new Error('DOCUMENT_CONFLICT: save receipt content mismatch');
+    if ((saved.sourceContent ?? saved.content) !== editingContent) throw new Error('DOCUMENT_CONFLICT: save receipt content mismatch');
+    const committedContent = saved.content;
+    const beforeRebase = state.editing ? editorContent() : state.currentFile.content;
+    const rebased = saved.rebaseContent ? saved.rebaseContent(beforeRebase) : beforeRebase;
+    if (!isCurrentSession()) return;
+    if ((state.editing ? editorContent() : state.currentFile.content) !== beforeRebase) throw new Error('DOCUMENT_COPY_EDITOR_CHANGED');
+    const currentContent = rebased;
     if (state.documentConflict) resetDocumentConflict();
-    const currentContent = state.editing ? editorContent() : state.currentFile.content;
-    const unchangedSinceSave = currentContent === editingContent;
+    const unchangedSinceSave = beforeRebase === editingContent;
     state.currentFile = saved;
     state.saveAsRequired = false;
     state.saveWarningShown = false;
     state.currentFile.content = currentContent;
-    state.savedContent = editingContent;
+    state.savedContent = committedContent;
+    if (currentContent !== beforeRebase && codeEditor) codeEditor.dispatch({ changes: { from: 0, to: codeEditor.state.doc.length, insert: currentContent }, userEvent: 'input.save-as' });
+    if (saved.directory !== originalDirectory && codeEditor && typeof updateImagePreviewDirectory !== 'undefined' && updateImagePreviewDirectory) {
+      codeEditor.dispatch({ effects: updateImagePreviewDirectory.of(saved.directory || '') });
+    }
     if (typeof documentHasDiagrams === 'function') state.currentDocumentHasDiagrams = documentHasDiagrams(currentContent);
     syncDocumentAccessControls();
     addRecentDocument(saved);
     renderEditorPreview(state.currentFile.content);
     if (!state.editing) renderCurrentDocument();
     els.editorFileName.textContent = saved.name;
+    syncDocumentIdentity();
     if (state.sidebarMode === 'recent') state.files = [...state.recentFiles];
     renderFileList();
     setDirty(!unchangedSinceSave);
@@ -6029,7 +6279,7 @@ async function saveDocument(saveAs = false, options = {}) {
       clearTimeout(saveDocument.statusTimer);
       saveDocument.statusTimer = setTimeout(() => { if (isCurrentSession() && !state.dirty) els.editorSaveState.textContent = t('saved'); }, 1800);
     } else if (!options.silent) {
-      showToast(t(saveAs ? 'saveAsDone' : 'saveDone'), 'success');
+      showToast(t(saved.warning ? 'saveRecordsWarning' : (saveAs ? 'saveAsDone' : 'saveDone')), saved.warning ? 'warning' : 'success');
     }
     return saved;
   } catch (error) {
@@ -6058,6 +6308,10 @@ async function saveDocument(saveAs = false, options = {}) {
       showToast(state.language === 'en' ? 'Safe saving requires folder access or metadata support. The original is unchanged; save a copy in another authorized folder.' : '当前目录权限或文件特殊属性不支持安全保存。原文件未更改，请另存副本到已授权目录。', 'warning');
       return;
     }
+    if (/DOCUMENT_COPY_EXISTS|PORTABLE_|DOCUMENT_COPY_EDITOR_CHANGED/.test(String(error))) {
+      if (!options.auto) showToast(authoringError(error), 'warning', 7200);
+      return;
+    }
     if (!saveAs) {
       state.saveAsRequired = true;
       els.editorSaveState.textContent = t('saveAsRequired');
@@ -6076,6 +6330,7 @@ async function saveDocument(saveAs = false, options = {}) {
     console.error(error);
   } finally {
     state.saving = false;
+    syncDocumentIdentity();
   }
   if (fallbackToSaveAs && isCurrentSession()) return await saveDocument(true, options);
 }
@@ -6256,6 +6511,10 @@ async function exportWordDocument(options = {}) {
       showToast(t('exportDocumentTooLarge'), 'warning');
       return false;
     }
+    if (isExportAccessDeniedError(error)) {
+      showToast(t('exportAccessDenied'), 'warning', 7200);
+      return false;
+    }
     reportSilentError(error, 'document.export-word');
     console.error(error);
     showToast(t('wordExportFailed'), 'error');
@@ -6285,6 +6544,10 @@ async function exportHTMLDocument(options = {}) {
     }
     if (isExportTooLargeError(error)) {
       showToast(t('exportDocumentTooLarge'), 'warning');
+      return false;
+    }
+    if (isExportAccessDeniedError(error)) {
+      showToast(t('exportAccessDenied'), 'warning', 7200);
       return false;
     }
     reportSilentError(error, 'document.export-html');
@@ -6337,6 +6600,10 @@ async function exportPDFWithBookmarks(options = {}, { allowSystemFallback = true
     }
     if (isExportTooLargeError(error)) {
       showToast(t('exportDocumentTooLarge'), 'warning');
+      return false;
+    }
+    if (isExportAccessDeniedError(error)) {
+      showToast(t('exportAccessDenied'), 'warning', 7200);
       return false;
     }
     reportSilentError(error, 'document.export-pdf');
@@ -6435,6 +6702,7 @@ async function refreshPandocStatus() {
 }
 
 async function openExportCenter() {
+  if (!closeTypographySettings()) return;
   if (!state.currentFile) {
     showToast(t('exportNoDocument'), 'warning');
     return;
@@ -6698,6 +6966,13 @@ async function performExportCenter() {
     else if (options.format === 'html-plain') output = await exportPlainHTMLDocument(options);
     else if (options.format === 'pdf') output = await exportPDFWithBookmarks(options);
     else if (['png', 'jpeg'].includes(options.format)) output = await exportDocumentImage(options.format, options);
+    else if (options.format === 'markdown-portable') {
+      const doc = state.currentFile;
+      const snapshot = state.editing ? editorContent() : doc.content;
+      const portable = await transformMarkdownImages(snapshot, ref => window.quilliteMarkdown.readPortableImage(ref, doc.directory), { portable: true });
+      output = await window.quilliteMarkdown.exportPortableMarkdown(doc.path, portable);
+      if (!output) return; // Native picker cancelled: keep export options and document intact.
+    }
     else output = await window.quilliteMarkdown.exportWithPandoc({
       sourcePath: state.currentFile.path,
       title: state.currentFile.name,
@@ -6716,11 +6991,13 @@ async function performExportCenter() {
     completed = true;
   } catch (error) {
     if (String(error?.message || error).includes('EXPORT_IMAGE_TOO_TALL')) showToast(t('imageExportTooTall'), 'warning');
+    else if (/PORTABLE_|IMAGE_EMBED_TYPE|DOCUMENT_COPY_EXISTS/.test(String(error?.message || error))) showToast(authoringError(error), 'warning', 7200);
     else if (String(error?.message || error).includes('EXPORT_IMAGE_BLANK')) showToast(t('imageExportBlank'), 'warning');
     else if (isExportImageResourceError(error)) showToast(t('exportImageResourceFailed'), 'warning');
     else if (isExportSourceTooLargeError(error)) showToast(t('exportSourceDocumentTooLarge'), 'warning');
     else if (isExportTooLargeError(error)) showToast(t('exportDocumentTooLarge'), 'warning');
     else if (isExportFileInUseError(error)) showToast(t('exportFileInUse'), 'warning');
+    else if (isExportAccessDeniedError(error)) showToast(t('exportAccessDenied'), 'warning', 7200);
     else {
       reportSilentError(error, `document.export-${options?.format || 'unknown'}`);
       showToast(error?.message || t('exportFailed'), 'error');
@@ -6751,6 +7028,7 @@ async function confirmPDFExport() {
 }
 
 async function printCurrentDocument(options = {}) {
+  if (!closeTypographySettings()) return;
   if (state.editing) toggleEditor(false);
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   await renderMermaidDiagrams(els.content, {
@@ -6816,7 +7094,7 @@ async function openFile() {
     }
   } catch (error) {
     reportSilentError(error, 'document.open');
-    showToast(t('openFailed'), 'error');
+    showToast(t(diagnosticErrorMessage(error).includes('DOCUMENT_TOO_LARGE') ? 'documentTooLarge' : 'openFailed'), 'error');
   }
 }
 
@@ -7246,7 +7524,15 @@ function closeAbout() {
 }
 
 function aiErrorMessage(error) {
-  return diagnosticErrorMessage(error).replace(/^Error:\s*/i, '').trim();
+  const message = diagnosticErrorMessage(error).replace(/^Error:\s*/i, '').trim();
+  if (/AI_INPUT_TOO_LARGE|too long to (?:process|review) safely/i.test(message)) return t('aiInputTooLong');
+  if (/AI_OUTPUT_TRUNCATED/i.test(message)) return t('aiTruncatedReplyHint');
+  if (/AI_CONTENT_FILTERED/i.test(message)) return t('aiFilteredReplyHint');
+  if (/AI_RESPONSE_INCOMPLETE/i.test(message)) return t('aiIncompleteReplyHint');
+  if (/AI_RESPONSE_TOO_LARGE/i.test(message)) return t('aiResponseTooLargeHint');
+  if (/AI_PROVIDER_ERROR/i.test(message)) return t('aiProviderFailureHint');
+  if (/AI_EMPTY_REPLY|returned an empty (?:message|result)/i.test(message)) return t('aiEmptyReplyHint');
+  return message;
 }
 
 const aiProviderConfigs = Object.freeze({
@@ -7773,7 +8059,7 @@ function renderAISendPrivacy(kind, content) {
 	const { panel, sendSummary, summary, list } = aiPrivacyElements(kind);
 	const findings = aiPrivacyFindings(kind);
   panel.classList.remove('hidden');
-  sendSummary.textContent = aiProviderSendSummary([...String(content || '')].length);
+  sendSummary.textContent = aiProviderSendSummary(aiInputCharacterCount(content));
   const selected = findings.filter(item => item.selected).length;
   summary.textContent = findings.length
     ? t('aiPrivacyFound', { count: findings.length, selected })
@@ -7809,7 +8095,9 @@ function setAISendPrivacyDisabled(kind, disabled) {
 }
 
 function prepareAIContent(text, findings) {
-  return redactAISensitiveContent(text, findings);
+  const redacted = redactAISensitiveContent(text, findings);
+  const images = protectEmbeddedImages(redacted.text);
+  return { text: images.text, replacements: [...images.replacements, ...redacted.replacements] };
 }
 
 const aiRewritePromptProfiles = {
@@ -8001,6 +8289,10 @@ function renderDocumentSummary(markdown) {
 
 async function openAIDocumentSummary() {
 	const markdown = state.currentFile?.content || '';
+  if (exceedsAIInputLimit(markdown)) {
+    showToast(t('aiInputTooLong'), 'warning');
+    return;
+  }
   if (!markdown.trim()) {
     showToast(t('exportNoDocument'), 'warning');
     return;
@@ -8025,6 +8317,11 @@ async function openAIDocumentSummary() {
 
 async function generateAIDocumentSummary() {
 	const markdown = state.currentFile?.content || '';
+  if (exceedsAIInputLimit(markdown)) {
+    els.documentSummaryStatus.textContent = t('aiInputTooLong');
+    els.documentSummaryStatus.classList.remove('hidden');
+    return;
+  }
 	if (!markdown.trim()) {
 		showToast(t('exportNoDocument'), 'warning');
 		closeDocumentSummary();
@@ -8042,6 +8339,11 @@ async function generateAIDocumentSummary() {
 	}));
 	renderAISendPrivacy('summary', markdown);
 	const prepared = prepareAIContent(markdown, documentSummaryPrivacyFindings);
+  if (exceedsAIInputLimit(prepared.text)) {
+    els.documentSummaryStatus.textContent = t('aiInputTooLong');
+    els.documentSummaryStatus.classList.remove('hidden');
+    return;
+  }
 	setAISendPrivacyDisabled('summary', true);
 	els.documentSummaryPrivacy.classList.add('hidden');
 	els.documentSummaryStatus.textContent = '';
@@ -8329,6 +8631,10 @@ function closeAIRewrite() {
 
 async function generateAIRewrite() {
   if (!aiRewriteSelection) return;
+  if (exceedsAIInputLimit(aiRewriteRequestText())) {
+    els.aiRewriteStatus.textContent = t('aiInputTooLong');
+    return;
+  }
   const action = els.aiRewriteAction.value;
   const instruction = els.aiInstruction.value.trim();
   if (!instruction) {
@@ -8353,6 +8659,11 @@ async function generateAIRewrite() {
   }));
   renderAISendPrivacy('rewrite', requestText);
   const prepared = prepareAIContent(requestText, aiRewritePrivacyFindings);
+  if (exceedsAIInputLimit(prepared.text)) {
+    activeAIRewriteRequestID = '';
+    els.aiRewriteStatus.textContent = t('aiInputTooLong');
+    return;
+  }
   setAISendPrivacyDisabled('rewrite', true);
   stopAIRewriteStream();
   clearAIRewriteDiff();
@@ -8361,9 +8672,9 @@ async function generateAIRewrite() {
   els.aiResultText.readOnly = true;
   let streamedText = '';
   aiRewriteStreamCleanup = window.quilliteMarkdown.onAIRewriteChunk?.(chunk => {
-    if (requestNumber !== aiRewriteRequest || chunk?.requestId !== requestID) return;
+    if (!aiRewriteStreaming || requestNumber !== aiRewriteRequest || chunk?.requestId !== requestID) return;
     streamedText = chunk.replace ? (chunk.text || '') : streamedText + (chunk.text || '');
-    els.aiResultText.value = restoreAISensitiveContent(streamedText, prepared.replacements);
+    els.aiResultText.value = restoreAISensitiveContent(streamedText, prepared.replacements.filter(item => !/^data:image\//i.test(item.value)));
     els.aiResultText.scrollTop = els.aiResultText.scrollHeight;
     if (chunk.done) aiRewriteStreaming = false;
   });
@@ -8392,6 +8703,10 @@ async function generateAIRewrite() {
   } catch (error) {
     if (requestNumber !== aiRewriteRequest) return;
     stopAIRewriteProgress();
+    // Emitted deltas are only a preview. An unsuccessful response must not
+    // become an editable/applicable partial answer after the stream stops.
+    els.aiResultText.value = '';
+    clearAIRewriteDiff();
     els.aiRewriteStatus.textContent = `${t('aiRequestFailed')}: ${aiErrorMessage(error)}`;
     reportSilentError(error, 'ai.edit');
   } finally {
@@ -8685,7 +9000,7 @@ async function runAIDocumentReview() {
     els.aiReviewStatus.textContent = t('aiReviewEmptyDocument');
     return;
   }
-  if ([...source].length > 2000000) {
+  if (exceedsAIInputLimit(source)) {
     els.aiReviewStatus.textContent = t('aiReviewTooLong');
     return;
   }
@@ -8694,6 +9009,11 @@ async function runAIDocumentReview() {
   aiReviewPrivacyFindings = detectAISensitiveContent(source).map((finding, index) => ({ ...finding, selected: aiReviewPrivacyFindings[index]?.value === finding.value ? aiReviewPrivacyFindings[index].selected : true }));
   renderAISendPrivacy('review', source);
   const prepared = prepareAIContent(source, aiReviewPrivacyFindings);
+  if (exceedsAIInputLimit(prepared.text)) {
+    activeAIReviewRequestID = '';
+    els.aiReviewStatus.textContent = t('aiInputTooLong');
+    return;
+  }
   setAISendPrivacyDisabled('review', true);
   aiReviewSessionActive = true;
   aiReviewApplied = false;
@@ -8820,9 +9140,9 @@ async function openFeedback() {
   try {
     state.feedbackSystemInfo = await window.quilliteMarkdown.getFeedbackSystemInfo();
   } catch {
-    state.feedbackSystemInfo = { appVersion: '2.7.5', os: 'windows', systemVersion: '—' };
+    state.feedbackSystemInfo = { appVersion: '2.7.6', os: 'windows', systemVersion: '—' };
   }
-  $('#feedbackAppVersion').textContent = state.feedbackSystemInfo?.appVersion || '2.7.5';
+  $('#feedbackAppVersion').textContent = state.feedbackSystemInfo?.appVersion || '2.7.6';
   $('#feedbackSystemVersion').textContent = state.feedbackSystemInfo?.systemVersion || '—';
   requestAnimationFrame(() => $('#feedbackMessage').focus());
 }
@@ -8880,7 +9200,7 @@ function openUpdateDialog(info) {
   state.updateInfo = info;
   const unsafeWindowsUninstaller = info.manualInstallReason === 'windows-unsafe-uninstaller';
   $('#updateTitle').textContent = unsafeWindowsUninstaller && !info.available ? t('installerRepairRequired') : t('updateAvailable');
-  $('#currentVersion').textContent = info.currentVersion || '2.7.5';
+  $('#currentVersion').textContent = info.currentVersion || '2.7.6';
   $('#latestVersion').textContent = info.latestVersion || '';
   $('#updateReleaseName').textContent = info.releaseName || `v${info.latestVersion || ''}`;
   const notesElement = $('#releaseNotes');
@@ -9245,11 +9565,13 @@ async function initialize() {
   if (!initializeMacSystemColorMode()) setColorMode(state.colorMode);
   setFontScale(state.fontScale, true, state.fontScaleMode);
   await setFontFamily(state.fontFamily, true, false);
+  syncBodyTypography(state.bodyTypography);
   setDocumentWidth(state.docWidth, true);
   setEditorLayout(state.editorLayout, true);
   scheduleMacWindowModeSync();
   const prefs = await window.quilliteMarkdown.getPreferences();
   await setFontFamily(prefs.fontFamily || 'system', true, false);
+  syncBodyTypography(prefs.bodyTypography);
   state.usageAnalytics = prefs.usageAnalytics !== false;
   els.usageAnalyticsToggle.checked = state.usageAnalytics;
   try {
@@ -9281,6 +9603,34 @@ $('#newFileButton').addEventListener('click', newFile);
 $('#closeToast').addEventListener('click', hideToast);
 $('#discardRecovery').addEventListener('click', discardRecoverySnapshot);
 $('#restoreRecovery').addEventListener('click', restoreRecoverySnapshot);
+$('#closeTypography').addEventListener('click', closeTypographySettings);
+$('#cancelTypography').addEventListener('click', closeTypographySettings);
+$('#resetTypography').addEventListener('click', () => fillTypographyForm());
+$('#saveTypography').addEventListener('click', saveTypographySettings);
+['bodyStyle', 'bodyFormulaSize'].forEach(id => {
+  $(`#${id}`).addEventListener('change', updateTypographySample);
+});
+$('#typographyDialog').addEventListener('cancel', event => {
+  if ($('#typographyDialog').dataset.saving === 'true') event.preventDefault();
+});
+$('#typographyDialog').addEventListener('close', () => {
+  applyBodyTypography(state.bodyTypography, document.documentElement.style, codeEditor);
+  $('#moreButton').focus();
+});
+$('#typographyDialog').addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    closeTypographySettings();
+    return;
+  }
+  // Keep document shortcuts and browser Save Page out of the settings dialog.
+  if ((event.ctrlKey || event.metaKey) && ['n', 'o', 's', 'e', 'f', 'p', '+', '=', '-', '0'].includes(event.key.toLowerCase())) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+});
+
 $('#cancelUnsavedClose').addEventListener('click', closeUnsavedCloseDialog);
 $('#discardUnsavedClose').addEventListener('click', discardAndQuit);
 $('#saveUnsavedClose').addEventListener('click', saveAndQuit);
@@ -9315,6 +9665,14 @@ els.accentMenu.addEventListener('click', event => {
 });
 els.backToTop.addEventListener('click', () => $('.reader-pane').scrollTo({ top: 0, behavior: 'smooth' }));
 els.editButton.addEventListener('click', () => toggleEditor());
+$('#renameDocumentButton').addEventListener('click', openRenameDocument);
+$('#editorDocumentLocation').addEventListener('click', () => { if (state.currentFile) window.quilliteMarkdown.showInFolder(state.currentFile.path).catch(error => showToast(t('renameFailed'), 'error')); });
+$('#cancelRenameDocument').addEventListener('click', closeRenameDocument);
+$('#confirmRenameDocument').addEventListener('click', confirmRenameDocument);
+$('#renameDocumentDialog').addEventListener('keydown', event => {
+  if (event.key === 'Escape') { event.preventDefault(); closeRenameDocument(); }
+  if (event.key === 'Enter' && !event.isComposing && event.target.id === 'renameDocumentName') { event.preventDefault(); confirmRenameDocument(); }
+});
 els.saveButton.addEventListener('click', () => saveDocument(false));
 $('#saveAsButton').addEventListener('click', () => saveDocument(true));
 els.recentTab.addEventListener('click', () => {
@@ -10140,6 +10498,7 @@ els.moreMenu.addEventListener('click', event => {
   if (action === 'export-center') openExportCenter();
   if (action === 'document-tools') documentTools.open();
   if (action === 'image-upload-settings') openImageUploadSettings();
+  if (action === 'body-typography') openTypographySettings();
   if (action === 'ai-settings') openAISettings();
   if (action === 'feedback') openFeedback();
   if (action === 'check-update') checkForUpdates(true);
@@ -10350,6 +10709,7 @@ els.editorPreview.addEventListener('dblclick', event => {
 
 document.addEventListener('keydown', event => {
   if (event.defaultPrevented) return;
+  if ($('#typographyDialog').contains(document.activeElement)) return;
   const primaryModifier = event.ctrlKey || event.metaKey;
   if (event.key === 'Escape' && cancelPinnedPointerReorder()) event.preventDefault();
   else if (primaryModifier && event.key.toLowerCase() === 'n') { event.preventDefault(); newFile(); }

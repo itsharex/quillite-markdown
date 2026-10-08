@@ -772,3 +772,68 @@ func TestOpenAICompatibleStreamingRetriesWithoutStreamingWhenGatewayEmitsNoText(
 		t.Fatalf("unexpected compatibility retry: result=%q requests=%d", result, requests)
 	}
 }
+
+func TestAICompatibleAnswerFieldsAndIncompleteReplies(t *testing.T) {
+	for _, body := range []string{
+		`{"choices":[{"message":{"content":null,"text":"answer"}}]}`,
+		`{"choices":[{"message":{"content":"  ","text":"answer"}}]}`,
+		`{"choices":[{"message":{"content":""},"text":"answer"}]}`,
+		`{"choices":[{"message":{"content":{"text":"answer"}}}]}`,
+		"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":null,\"text\":\"ans\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"wer\"}}]}\n\ndata: [DONE]\n",
+	} {
+		answer, err := decodeAIChatResponse(strings.NewReader(body))
+		if err != nil || answer != "answer" {
+			t.Fatalf("body=%s: answer=%q err=%v", body, answer, err)
+		}
+	}
+	for _, test := range []struct{ body, marker string }{
+		{`{"choices":[{"message":{"content":null,"reasoning_content":"private reasoning"}}]}`, "AI_EMPTY_REPLY"},
+		{`{"choices":[{"message":{"content":"partial"},"finish_reason":"length"}]}`, "AI_OUTPUT_TRUNCATED"},
+		{`{"choices":[{"message":{"refusal":"provider refusal"},"finish_reason":"stop"}]}`, "AI_CONTENT_FILTERED"},
+	} {
+		answer, err := decodeAIChatResponse(strings.NewReader(test.body))
+		if err == nil || !strings.Contains(err.Error(), test.marker) || answer != "" {
+			t.Fatalf("incomplete reply accepted: answer=%q err=%v", answer, err)
+		}
+	}
+}
+
+func TestAIEmptyJSONStreamingReplyRetriesOnce(t *testing.T) {
+	app, _ := aiTestApp(t)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":null}}]}`))
+		} else {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":null,"text":"summary"}}]}`))
+		}
+	}))
+	defer server.Close()
+	answer, err := app.callOpenAICompatibleStreamWithKey(context.Background(), server.URL, "model", "test", "request", aiSystemPrompt, "summarize")
+	if err != nil || answer != "summary" || requests != 2 {
+		t.Fatalf("answer=%q requests=%d err=%v", answer, requests, err)
+	}
+}
+
+func TestAINonStreamingGatewaySSESkipsRoleAndKeepsAllTextEvents(t *testing.T) {
+	app, _ := aiTestApp(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" \"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\ndata: [DONE]\n"))
+	}))
+	defer server.Close()
+	answer, err := app.callOpenAICompatibleWithSystemKey(context.Background(), server.URL, "model", "key", aiSystemPrompt, "summarize")
+	if err != nil || answer != "one two" {
+		t.Fatalf("answer=%q err=%v", answer, err)
+	}
+}
+
+func TestAIInputLimitIsRejectedBeforeProviderRequest(t *testing.T) {
+	app, _ := aiTestApp(t)
+	_, err := app.RewriteWithAI(AIRewriteRequest{Action: "summarize", Text: strings.Repeat("文", maxAITotalCharacters+1)})
+	if err == nil || !strings.Contains(err.Error(), "AI_INPUT_TOO_LARGE") {
+		t.Fatalf("got %v", err)
+	}
+}

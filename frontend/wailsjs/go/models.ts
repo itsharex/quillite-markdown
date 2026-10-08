@@ -56,11 +56,11 @@ export namespace main {
 	    text: string;
 	    instruction: string;
 	    requestId?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AIDocumentReviewRequest(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.text = source["text"];
@@ -76,11 +76,11 @@ export namespace main {
 	    replacement: string;
 	    reason: string;
 	    occurrence: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AIDocumentSuggestion(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -94,16 +94,16 @@ export namespace main {
 	}
 	export class AIDocumentReviewResponse {
 	    suggestions: AIDocumentSuggestion[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AIDocumentReviewResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.suggestions = this.convertValues(source["suggestions"], AIDocumentSuggestion);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -122,7 +122,7 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class AIModelDiscoveryInput {
 	    provider: string;
 	    baseUrl: string;
@@ -145,11 +145,11 @@ export namespace main {
 	    instruction: string;
 	    targetLanguage: string;
 	    requestId?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AIRewriteRequest(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.action = source["action"];
@@ -161,11 +161,11 @@ export namespace main {
 	}
 	export class AIRewriteResponse {
 	    text: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AIRewriteResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.text = source["text"];
@@ -178,11 +178,11 @@ export namespace main {
 	    hasApiKey: boolean;
 	    maskedApiKey?: string;
 	    isDefault: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AISettings(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.provider = source["provider"];
@@ -199,11 +199,11 @@ export namespace main {
 	    model: string;
 	    apiKey: string;
 	    clearApiKey: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AISettingsInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.provider = source["provider"];
@@ -213,14 +213,32 @@ export namespace main {
 	        this.clearApiKey = source["clearApiKey"];
 	    }
 	}
+	export class BodyTypography {
+	    chineseFont: string;
+	    englishFont: string;
+	    formulaSize: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BodyTypography(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.chineseFont = source["chineseFont"];
+	        this.englishFont = source["englishFont"];
+	        this.formulaSize = source["formulaSize"];
+	    }
+	}
 	export class DiagnosticFlags {
 	    documentOpen: boolean;
 	    unsaved: boolean;
 	    conflict: boolean;
 	    saving: boolean;
+
 	    static createFrom(source: any = {}) {
 	        return new DiagnosticFlags(source);
 	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.documentOpen = source["documentOpen"];
@@ -232,14 +250,17 @@ export namespace main {
 	export class DiagnosticInput {
 	    checks: DiagnosticFlags;
 	    errors: Record<string, number>;
+
 	    static createFrom(source: any = {}) {
 	        return new DiagnosticInput(source);
 	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.checks = this.convertValues(source["checks"], DiagnosticFlags);
 	        this.errors = source["errors"];
 	    }
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -268,11 +289,13 @@ export namespace main {
 	    replacedPath?: string;
 	    readOnly?: boolean;
 	    revision?: string;
-	
+	    draft?: boolean;
+	    warning?: string;
+
 	    static createFrom(source: any = {}) {
 	        return new Document(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -284,6 +307,8 @@ export namespace main {
 	        this.replacedPath = source["replacedPath"];
 	        this.readOnly = source["readOnly"];
 	        this.revision = source["revision"];
+	        this.draft = source["draft"];
+	        this.warning = source["warning"];
 	    }
 	}
 	export class DocumentVersion {
@@ -335,11 +360,11 @@ export namespace main {
 	    customExtension?: string;
 	    imageScale?: number;
 	    imageLayout?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ExportPreset(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -357,17 +382,17 @@ export namespace main {
 	export class ExportSettings {
 	    pandocPath?: string;
 	    presets?: ExportPreset[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ExportSettings(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.pandocPath = source["pandocPath"];
 	        this.presets = this.convertValues(source["presets"], ExportPreset);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -390,11 +415,11 @@ export namespace main {
 	    path: string;
 	    name: string;
 	    size: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FeedbackImageSelection(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -408,11 +433,11 @@ export namespace main {
 	    email: string;
 	    phone: string;
 	    imagePaths: string[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FeedbackSubmission(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.category = source["category"];
@@ -426,11 +451,11 @@ export namespace main {
 	    appVersion: string;
 	    os: string;
 	    systemVersion: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FeedbackSystemInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.appVersion = source["appVersion"];
@@ -443,11 +468,11 @@ export namespace main {
 	    name: string;
 	    relativePath: string;
 	    directory: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FolderFile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -460,18 +485,18 @@ export namespace main {
 	    root: string;
 	    name: string;
 	    files: FolderFile[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FolderResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.root = source["root"];
 	        this.name = source["name"];
 	        this.files = this.convertValues(source["files"], FolderFile);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -495,11 +520,11 @@ export namespace main {
 	    serverUrl: string;
 	    hasSecret: boolean;
 	    hasCloudToken: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ImageUploadSettings(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
@@ -513,11 +538,11 @@ export namespace main {
 	    serverUrl: string;
 	    secret: string;
 	    clearSecret: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ImageUploadSettingsInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
@@ -537,11 +562,11 @@ export namespace main {
 	    extraArguments?: string;
 	    customWriter?: string;
 	    customExtension?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PandocExportInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sourcePath = source["sourcePath"];
@@ -560,11 +585,11 @@ export namespace main {
 	    available: boolean;
 	    path?: string;
 	    version?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PandocStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.available = source["available"];
@@ -576,11 +601,11 @@ export namespace main {
 	    connected: boolean;
 	    user?: string;
 	    plan?: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PicGoCloudStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.connected = source["connected"];
@@ -591,11 +616,11 @@ export namespace main {
 	export class RecentFileStatus {
 	    path: string;
 	    exists: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RecentFileStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -610,9 +635,11 @@ export namespace main {
 	    favoriteFileStatuses?: RecentFileStatus[];
 	    draftFiles?: string[];
 	    lastFile?: string;
+	    lastSaveDirectory?: string;
 	    explorerRoot?: string;
 	    language: string;
 	    fontFamily?: string;
+	    bodyTypography: BodyTypography;
 	    lastUpdateCheck?: string;
 	    suppressUpdateUntil?: string;
 	    usageAnalytics: boolean;
@@ -626,11 +653,11 @@ export namespace main {
 	    anonymousInstallId?: string;
 	    lastActiveReport?: string;
 	    exportSettings?: ExportSettings;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Preferences(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.recentFiles = source["recentFiles"];
@@ -640,9 +667,11 @@ export namespace main {
 	        this.favoriteFileStatuses = this.convertValues(source["favoriteFileStatuses"], RecentFileStatus);
 	        this.draftFiles = source["draftFiles"];
 	        this.lastFile = source["lastFile"];
+	        this.lastSaveDirectory = source["lastSaveDirectory"];
 	        this.explorerRoot = source["explorerRoot"];
 	        this.language = source["language"];
 	        this.fontFamily = source["fontFamily"];
+	        this.bodyTypography = this.convertValues(source["bodyTypography"], BodyTypography);
 	        this.lastUpdateCheck = source["lastUpdateCheck"];
 	        this.suppressUpdateUntil = source["suppressUpdateUntil"];
 	        this.usageAnalytics = source["usageAnalytics"];
@@ -657,7 +686,7 @@ export namespace main {
 	        this.lastActiveReport = source["lastActiveReport"];
 	        this.exportSettings = this.convertValues(source["exportSettings"], ExportSettings);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -676,7 +705,7 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class RecoverySnapshot {
 	    baseRevision?: string;
 	    conflict?: boolean;
@@ -736,11 +765,11 @@ export namespace main {
 	    releaseNotes: string;
 	    releaseUrl: string;
 	    publishedAt: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new UpdateInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.checked = source["checked"];
@@ -778,9 +807,11 @@ export namespace main {
 	export class WorkspaceApplyResult {
 	    path: string;
 	    status: string;
+
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceApplyResult(source);
 	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -794,9 +825,11 @@ export namespace main {
 	    after: string;
 	    revision: string;
 	    count: number;
+
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceChange(source);
 	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -812,9 +845,11 @@ export namespace main {
 	    relativePath: string;
 	    line: number;
 	    text: string;
+
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceMatch(source);
 	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -828,9 +863,11 @@ export namespace main {
 	    changes: WorkspaceChange[];
 	    skipped: number;
 	    limited: boolean;
+
 	    static createFrom(source: any = {}) {
 	        return new WorkspacePreview(source);
 	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.token = source["token"];
@@ -838,6 +875,7 @@ export namespace main {
 	        this.skipped = source["skipped"];
 	        this.limited = source["limited"];
 	    }
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -863,9 +901,11 @@ export namespace main {
 	    extension: string;
 	    replacement: string;
 	    excludePath: string;
+
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceQuery(source);
 	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.root = source["root"];
@@ -881,9 +921,11 @@ export namespace main {
 	    scanned: number;
 	    skipped: number;
 	    limited: boolean;
+
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceSearchResult(source);
 	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.matches = this.convertValues(source["matches"], WorkspaceMatch);
@@ -891,6 +933,7 @@ export namespace main {
 	        this.skipped = source["skipped"];
 	        this.limited = source["limited"];
 	    }
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

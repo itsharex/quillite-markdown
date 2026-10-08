@@ -9,6 +9,9 @@ test('the build plugin handles the actual minified CSS import', () => {
   const result = config.plugins[0].transform(css, 'C:/project/node_modules/katex/dist/katex.min.css');
   assert.ok(result);
   assert.doesNotMatch(result.code, /\.(?:ttf|woff)\)/);
+  const withoutSources = value => value.replace(/src:\s*[^;}]+;?/g, 'src:FONT');
+  assert.equal(withoutSources(result.code), withoutSources(css), 'font optimization must preserve every non-src rule in minified CSS');
+  assert.match(result.code, /\.katex\{font:normal 1\.21em KaTeX_Main,Times New Roman,serif;/);
   assert.equal(config.plugins[0].transform(css, '/unrelated.css'), null);
 });
 
@@ -29,4 +32,9 @@ test('font optimization preserves every KaTeX face and its WOFF2 asset', () => {
 test('a source declaration without WOFF2 is preserved', () => {
   const css = '@font-face { src: url(custom.ttf) format("truetype"); }';
   assert.equal(woff2OnlyKaTeX(css), css);
+});
+
+test('a semicolon-less face cannot swallow the next selector or its font declaration', () => {
+  const input = '@font-face{font-family:Math;src:url(m.woff2) format("woff2"),url(m.ttf) format("truetype")}.katex{font:normal 1.21em Math;line-height:1.2}';
+  assert.equal(woff2OnlyKaTeX(input), '@font-face{font-family:Math;src: url(m.woff2) format("woff2")}.katex{font:normal 1.21em Math;line-height:1.2}');
 });

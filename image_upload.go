@@ -26,6 +26,7 @@ import (
 
 const (
 	imageUploadModeLocal       = "local"
+	imageUploadModeEmbedded    = "embedded"
 	imageUploadModePicGoCloud  = "picgo-cloud"
 	imageUploadModePicGo       = "picgo"
 	defaultPicGoServerURL      = "http://127.0.0.1:36677"
@@ -167,6 +168,8 @@ type picGoCloudCompletedPart struct {
 
 func normaliseImageUploadMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case imageUploadModeEmbedded:
+		return imageUploadModeEmbedded
 	case imageUploadModePicGoCloud:
 		return imageUploadModePicGoCloud
 	case imageUploadModePicGo:

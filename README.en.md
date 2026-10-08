@@ -1,6 +1,7 @@
 <div align="center">
   <img src="build/appicon.png" width="96" alt="Quillite Markdown icon">
   <h1>Quillite Markdown</h1>
+  <p>Image layout fixes preserve quote/list containers, soft-break rows and Word rows inside lists, with regression coverage for special paths and cross-directory Save As loading.</p>
   <p><strong>A fast, local-first Markdown reader, viewer and editor — about 12 MB on Windows.</strong></p>
   <p>Live preview · Syntax highlighting · Plain local files · Windows, macOS and Linux</p>
   <p><a href="README.md">简体中文</a> · <strong>English</strong></p>
@@ -18,6 +19,8 @@
     · <a href="#development">Build from source</a>
   </p>
 </div>
+
+Unreleased fixes: Windows cloud-folder saves no longer create hard links, while failed saves restore the original or retain recovery material. Diagram/formula scanning handles very long lines without whole-line regular expressions that can exhaust the WebView stack. AI operations support up to 2,000,000 Unicode characters and explain size, empty-answer, truncation and provider-filter errors before applying output. Responses exceeding 8 MiB, unterminated SSE or provider errors stop processing; partial output cannot be applied. Diagnostics hide complete paths and retain only fixed safe error categories. File opening remains limited to 64 MiB. For occupied or unwritable export targets, close the occupying app or select a writable folder and a new filename.
 
 Conflict recovery retains the original revision and paused state across restarts. Legacy snapshots require comparison before saving. Backups remain intact while conflicts are unresolved, and outdated merge drafts cannot be applied to newer edits without restarting the merge explicitly.
 
@@ -90,6 +93,13 @@ The macOS build follows the computer's light/dark appearance automatically while
 The macOS installer image carries a metadata no-index marker. On launch, the installed app also verifies the installer layout and Bundle Identifier before safely ejecting a still-mounted official DMG, preventing its bundled copy from appearing as a second Quillite Markdown icon.
 
 Documents and folders opened through macOS system panels, Finder, or file associations are persisted as native security-scoped bookmarks. Recent, Favorites, and Explorer silently restore read and edit access after relaunch and refresh stale bookmarks automatically. A preselected system panel is needed only for legacy records or when an unsigned update changes the app identity.
+
+## What's new in 2.7.6
+
+- Eleven automatic bilingual body styles with synchronized editor/preview, live document preview and cancel restoration; independent math fonts and monospaced code.
+- Visual previews, alignment and rows for supported image forms, with quote/list, special-path, Save As session and Word export regressions.
+- First-save name/location choice, safe rename, embedded images and Portable Markdown create-only copies.
+- Cloud-save, long-line parsing, compatible AI responses and diagnostic privacy fixes retain document/attachment safety boundaries.
 
 ## What's new in 2.7.5
 
@@ -228,6 +238,10 @@ Documents and folders opened through macOS system panels, Finder, or file associ
 
 ## Highlights
 
+- Click the editor filename to rename it safely and use the displayed location to reveal it. A new draft's first manual save asks for a name and folder; autosave continues protecting the draft. Save As remembers the last chosen folder and never overwrites an existing file. Cross-folder copies keep image links pointed at the original attachments.
+- Image storage now offers opt-in Base64 embedding for PNG, JPEG, WebP, GIF and BMP, plus a Portable Markdown export that embeds local images into a new standalone `.md` copy without changing originals or attachments. Limits: 25 MiB per image, 64 MiB per document and 256 distinct images per export. Online images are not fetched automatically. Encoded image data is omitted from AI requests; some Markdown readers may not support embedded images.
+- The source editor previews local attachments (relative/absolute paths and file URLs), HTTP(S) images, Base64/data images, reference-style Markdown and HTML `<img>`, also in editor-only mode. Every image supports undoable left/center/right alignment, retained in reading preview and Word/styled HTML/PDF exports. SVG is displayed only as an image, never as executable inline markup. Code and ordinary links are not loaded. Show Source never changes document content; missing images retain their references with a placeholder. Limits: 256 previews and 25 MiB per local/embedded image. Online images depend on network access and browser format support.
+- Image-only paragraphs with multiple images display horizontally. Join Next Image combines adjacent images into a row; Separate Images restores independent paragraphs. Each row supports 2–6 images with independent alignment, stored as a standard HTML image table without changing image addresses, consuming captions, or moving/deleting attachments. Word export fits images proportionally to their cell widths, without data-table borders or headers.
 - Read and edit Markdown with the same calm, polished interface.
 - Open, read, and edit plain-text `.txt` files too: the reader renders them as-is (no Markdown parsing), the editor uses plain text mode, and the `.txt` file association can be registered for double-click opening.
 - Insert images either from local files or by pasting an `http/https` online link with an optional description.
@@ -242,7 +256,8 @@ Documents and folders opened through macOS system panels, Finder, or file associ
 - A canvas badge marks every template with visual editing. State diagrams and mind maps now share the complete node canvas used by flowcharts, including full screen, zoom, free panning, node dragging, select-all group movement, connections, and automatic layout. State diagrams retain transition semantics, while mind maps retain a cycle-safe parent-child hierarchy; all three canvas types reopen from document fences and save in place. Sequence, Gantt, timeline, Kanban, pie, bar, line, and doughnut charts expose structured fields and data rows with a live preview. Advanced syntax stays safely in Source mode rather than being converted with data loss.
 - Diagram Builder also includes 15 offline data charts: bar, line, stacked bar, area, scatter, diverging comparison, bar-and-line combo, funnel, heatmap, box plot, bubble, gauge, doughnut, waterfall, and word cloud. Editable fenced `echarts` JSON stays in the Markdown file, renders locally as SVG, and exports consistently to Word, HTML, and PDF. [Open the data-chart examples](docs/ECharts-数据图表案例.md).
 - Three built-in reference shortcuts—Charts, Formulas, and Formatting—cover all 37 diagram templates, all 79 Academic Formula templates, and the Markdown/HTML formats supported by the editor. Opening a reference does not add it to Recent Reading.
-- More settings offers System, Sans serif, Serif, Rounded, Song-style, and Kai-style app fonts. The interface and Markdown prose update immediately and remember the choice, while code remains monospaced.
+- More settings offers System, Sans serif, Serif, Rounded, Song-style, and Kai-style app fonts. The interface, Markdown editor prose, reader and live preview share the selected font immediately and remember the choice. Font changes preserve the caret and undo history, while code remains monospaced.
+- More → App font → Body & math typography offers 11 automatic Chinese/English pairings: Default, Modern, Clear & readable, Book reading, Classic document, Literary, Handwritten feel, Soft & rounded, Magazine, Technical and Monospaced prose. The floating panel previews both panes directly in the current document; save remembers settings, while cancel or Escape restores the previous display. Previous custom pairs remain available. Small/Standard/Large math sizes retain KaTeX fonts; code stays monospaced, local fonts fall back when unavailable, and no online fonts are downloaded.
 - Close Preview returns from the reading screen to Home without removing the document from Recent. Home now provides the three complete examples together with a comprehensive shortcut guide for files, reading, editing, and text formatting.
 - Inserting a code block lets you pick a common programming language (JavaScript, Python, Go, Java, C/C++, Rust, HTML, SQL, and more) and writes a language-tagged fenced block with highlighting. An “Exit editing” button in the editor header returns you to the immersive reading view at any time.
 - Undo from the toolbar or with `Ctrl/Cmd + Z`; each document has isolated history that stops at the originally loaded content.

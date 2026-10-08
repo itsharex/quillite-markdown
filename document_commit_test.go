@@ -141,6 +141,27 @@ func TestDocumentCommitNewFileRaceIsCreateOnly(t *testing.T) {
 	assertDocumentBytes(t, staged, "editor")
 }
 
+func TestDocumentCommitCandidateFailureRestoresOriginalWithoutTouchingOtherFiles(t *testing.T) {
+	dir := t.TempDir()
+	target, staged, unrelated := filepath.Join(dir, "document.md"), filepath.Join(dir, "stage"), filepath.Join(dir, "user-notes.md")
+	os.WriteFile(target, []byte("original"), 0600)
+	os.WriteFile(staged, []byte("editor"), 0600)
+	os.WriteFile(unrelated, []byte("unrelated"), 0600)
+	err := commitDocumentReplacementWithOperations(staged, target, documentRevision([]byte("original")), publishDocumentFile, func(source, candidate string) error {
+		if source == staged {
+			return prepareDocumentCandidate(source, candidate)
+		}
+		// A sync filesystem refuses staging after the verified original moved.
+		return os.ErrPermission
+	})
+	if err == nil || !strings.Contains(err.Error(), "original restored") {
+		t.Fatalf("got %v", err)
+	}
+	assertDocumentBytes(t, target, "original")
+	assertDocumentBytes(t, staged, "editor")
+	assertDocumentBytes(t, unrelated, "unrelated")
+}
+
 func TestInstallerLifecycleKeepsProductionOwnershipChecks(t *testing.T) {
 	script, err := os.ReadFile("scripts/test-windows-install-lifecycle.ps1")
 	if err != nil {

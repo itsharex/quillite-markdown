@@ -29,7 +29,7 @@ const (
 	appNameEN       = "Quillite Markdown"
 	legacyAppNameZH = "MD阅读助手"
 	legacyAppNameEN = "MD Reader Assistant"
-	appVersion      = "2.7.5"
+	appVersion      = "2.7.6"
 	maxRecent       = 10
 )
 
@@ -71,6 +71,8 @@ type Document struct {
 	ReplacedPath string `json:"replacedPath,omitempty"`
 	ReadOnly     bool   `json:"readOnly,omitempty"`
 	Revision     string `json:"revision,omitempty"`
+	Draft        bool   `json:"draft,omitempty"`
+	Warning      string `json:"warning,omitempty"`
 }
 
 type FolderFile struct {
@@ -99,9 +101,11 @@ type Preferences struct {
 	FavoriteFileStatuses []RecentFileStatus `json:"favoriteFileStatuses,omitempty"`
 	DraftFiles           []string           `json:"draftFiles,omitempty"`
 	LastFile             string             `json:"lastFile,omitempty"`
+	LastSaveDirectory    string             `json:"lastSaveDirectory,omitempty"`
 	ExplorerRoot         string             `json:"explorerRoot,omitempty"`
 	Language             string             `json:"language"`
 	FontFamily           string             `json:"fontFamily,omitempty"`
+	BodyTypography       BodyTypography     `json:"bodyTypography"`
 	LastUpdateCheck      string             `json:"lastUpdateCheck,omitempty"`
 	SuppressUpdateUntil  string             `json:"suppressUpdateUntil,omitempty"`
 	UsageAnalytics       bool               `json:"usageAnalytics"`
@@ -274,7 +278,8 @@ func defaultPreferences() Preferences {
 	return Preferences{
 		RecentFiles: []string{}, PinnedRecentFiles: []string{}, FavoriteFiles: []string{}, DraftFiles: []string{},
 		Language: "zh-CN", FontFamily: "system", UsageAnalytics: true, ImageUploadMode: imageUploadModeLocal, PicGoServerURL: defaultPicGoServerURL,
-		AIProvider: aiProviderDeepSeek, AIBaseURL: defaultDeepSeekBaseURL, AIBaseURLs: map[string]string{}, AIModel: defaultDeepSeekModel, AIModels: map[string]string{},
+		BodyTypography: normaliseBodyTypography(BodyTypography{}),
+		AIProvider:     aiProviderDeepSeek, AIBaseURL: defaultDeepSeekBaseURL, AIBaseURLs: map[string]string{}, AIModel: defaultDeepSeekModel, AIModels: map[string]string{},
 		ExportSettings: defaultExportSettings(),
 	}
 }
@@ -316,6 +321,7 @@ func (a *App) readPreferencesUnlocked() (Preferences, error) {
 	}
 	prefs.Language = normaliseLanguage(prefs.Language)
 	prefs.FontFamily = normaliseFontFamily(prefs.FontFamily)
+	prefs.BodyTypography = normaliseBodyTypography(prefs.BodyTypography)
 	prefs.ImageUploadMode = normaliseImageUploadMode(prefs.ImageUploadMode)
 	prefs.AIProvider = normaliseAIProvider(prefs.AIProvider)
 	normaliseAIBaseURLPreferences(&prefs)
@@ -361,6 +367,7 @@ func (a *App) writePreferences(prefs Preferences) error {
 func (a *App) writePreferencesUnlocked(prefs Preferences) error {
 	prefs.Language = normaliseLanguage(prefs.Language)
 	prefs.FontFamily = normaliseFontFamily(prefs.FontFamily)
+	prefs.BodyTypography = normaliseBodyTypography(prefs.BodyTypography)
 	prefs.ImageUploadMode = normaliseImageUploadMode(prefs.ImageUploadMode)
 	prefs.AIProvider = normaliseAIProvider(prefs.AIProvider)
 	normaliseAIBaseURLPreferences(&prefs)
@@ -498,7 +505,7 @@ func (a *App) readDocument(filePath string, remember bool) (*Document, error) {
 	}
 	return &Document{
 		Path: absPath, Name: filepath.Base(absPath), Directory: filepath.Dir(absPath),
-		Content: string(data), ModifiedAt: info.ModTime().Format(time.RFC3339Nano), Size: info.Size(), Revision: documentRevision(data),
+		Content: string(data), ModifiedAt: info.ModTime().Format(time.RFC3339Nano), Size: info.Size(), Revision: documentRevision(data), Draft: a.isDraft(absPath),
 	}, nil
 }
 
@@ -635,6 +642,9 @@ func (a *App) NewFile() (*Document, error) {
 	home, _ := os.UserHomeDir()
 	config, _ := os.UserConfigDir()
 	directories := newDocumentDirectories(goruntime.GOOS, executable, home, config)
+	if prefs, err := a.readPreferences(); err == nil && usableSaveDirectory(prefs.LastSaveDirectory) != "" {
+		directories = append([]string{prefs.LastSaveDirectory}, directories...)
+	}
 	baseName := strings.TrimSuffix(a.text("newDocument"), filepath.Ext(a.text("newDocument")))
 	filePath, err := createNewMarkdownFile(directories, baseName, time.Now())
 	if err != nil {
@@ -903,12 +913,18 @@ func (a *App) SelectImage(currentFile string) (string, error) {
 		return "", err
 	}
 	_ = a.rememberMacSecurityScopedPath(imagePath, false)
+	if a.embedsImages() {
+		return a.embeddedImage(imagePath, filepath.Dir(currentFile))
+	}
 	return importImageToAssets(currentFile, imagePath)
 }
 
 // ImportImage copies a dropped image into the document's assets directory.
 func (a *App) ImportImage(currentFile, sourcePath string) (string, error) {
 	_ = a.rememberMacSecurityScopedPath(sourcePath, false)
+	if a.embedsImages() {
+		return a.embeddedImage(sourcePath, filepath.Dir(currentFile))
+	}
 	return importImageToAssets(currentFile, sourcePath)
 }
 
@@ -937,6 +953,12 @@ func (a *App) SavePastedImage(currentFile, dataURL string) (string, error) {
 	extension := extensionByMIME[mimeType]
 	if extension == "" {
 		return "", fmt.Errorf("unsupported clipboard image type: %s", mimeType)
+	}
+	if a.embedsImages() {
+		if err := validateEmbeddedRaster(data, mimeType); err != nil {
+			return "", err
+		}
+		return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 	}
 	name := "image-" + time.Now().Format("20060102-150405.000") + extension
 	return writeImageAsset(currentFile, name, data)
@@ -1068,7 +1090,7 @@ func (a *App) ReadImageData(imagePath, documentDirectory string) (string, error)
 	if info.Size() > maxImportedImageSize {
 		return "", errors.New("image exceeds the 25 MB preview limit")
 	}
-	data, err := os.ReadFile(resolved)
+	data, err := readImageBytes(resolved)
 	if err != nil {
 		return "", err
 	}
@@ -1259,8 +1281,7 @@ func (a *App) saveDocumentAs(currentPath, filePath, content string) (*Document, 
 	if claimedDraft {
 		defer a.releaseDraftReplacementClaim(claimKey)
 	}
-	_ = a.captureDocumentVersion(targetPath, content)
-	if err := writeDocumentAtomically(targetPath, []byte(content)); err != nil {
+	if err := writeConflictCopy(currentPath, targetPath, []byte(content)); err != nil {
 		return nil, err
 	}
 	saved, err := a.savedDocumentReceipt(targetPath, content, false)
@@ -1270,37 +1291,28 @@ func (a *App) saveDocumentAs(currentPath, filePath, content string) (*Document, 
 	if claimedDraft {
 		replacedPath, err := a.migrateClaimedDraft(filepath.Clean(currentPath), saved.Path, claimKey)
 		if err != nil {
-			return nil, err
+			// The new copy is already durable. Keep the original draft and its
+			// records, but return the copy's exact receipt instead of inviting
+			// a retry into an existing filename.
+			saved.Warning = "DOCUMENT_SAVE_RECORDS"
+		} else {
+			saved.ReplacedPath = replacedPath
 		}
-		saved.ReplacedPath = replacedPath
 	} else if err := a.rememberFile(saved.Path); err != nil {
-		return nil, err
+		saved.Warning = "DOCUMENT_SAVE_RECORDS"
 	}
 	// The frontend owns dirty state: a completed write may belong to an older
 	// document session or snapshot. Only it can acknowledge the saved content.
+	a.rememberSaveDirectory(saved.Directory)
 	return saved, nil
 }
 
 func (a *App) SaveAs(currentPath, content string) (*Document, error) {
-	defaultName := filepath.Base(currentPath)
-	if defaultName == "." || defaultName == "" {
-		defaultName = a.text("newDocument")
-	}
-	filePath, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
-		Title: a.text("saveAsMarkdown"), DefaultFilename: defaultName,
-		Filters: []wailsruntime.FileFilter{
-			{DisplayName: a.text("markdownDocument"), Pattern: "*.md"},
-			{DisplayName: a.text("textFile"), Pattern: "*.txt"},
-		},
-	})
+	filePath, err := a.ChooseDocumentSavePath(currentPath)
 	if err != nil || filePath == "" {
 		return nil, err
 	}
-	document, err := a.saveDocumentAs(currentPath, filePath, content)
-	if err == nil {
-		_ = a.rememberMacSecurityScopedPath(filePath, false)
-	}
-	return document, err
+	return a.SaveDocumentCopy(currentPath, filePath, content)
 }
 
 func (a *App) SetDirty(dirty bool) {
@@ -1677,7 +1689,7 @@ func (a *App) text(key string) string {
 			"exitUnsavedMessage": "文档中的更改尚未保存。确定要退出并放弃这些更改吗？", "continueEditing": "继续编辑",
 			"discardAndOpen": "不保存并打开", "discardAndExit": "不保存并退出", "openMarkdown": "打开 Markdown 文档", "reauthorizeDocument": "请选择该文档以恢复访问权限",
 			"markdownDocument": "Markdown 文档", "textFile": "文本文件", "allFiles": "所有文件", "openFolder": "打开文档文件夹",
-			"saveAsMarkdown": "另存为 Markdown 文档", "newDocument": "新建文档.md", "newMarkdown": "新建 Markdown 文档",
+			"saveAsMarkdown": "另存为 Markdown 文档", "newDocument": "新建文档.md", "newMarkdown": "新建 Markdown 文档", "portableMarkdown": "便携 Markdown (*.md)",
 			"selectImage": "选择要插入的图片", "imageFile": "图片文件", "exportWord": "导出 Word 文档", "wordDocument": "Word 文档", "exportHTML": "导出 HTML 网页", "htmlDocument": "HTML 网页",
 			"exportDocument": "导出文档", "exportPDF": "导出 PDF", "selectPandoc": "选择 Pandoc 可执行文件", "pandocExecutable": "Pandoc 可执行文件", "exportImage": "导出长图", "pngImage": "PNG 图片", "jpegImage": "JPEG 图片",
 		},
@@ -1686,7 +1698,7 @@ func (a *App) text(key string) string {
 			"exitUnsavedMessage": "The document has unsaved changes. Exit and discard them?", "continueEditing": "Continue Editing",
 			"discardAndOpen": "Discard and Open", "discardAndExit": "Discard and Exit", "openMarkdown": "Open Markdown Document", "reauthorizeDocument": "Choose this document to restore access",
 			"markdownDocument": "Markdown Document", "textFile": "Text File", "allFiles": "All Files", "openFolder": "Open Document Folder",
-			"saveAsMarkdown": "Save Markdown Document As", "newDocument": "New document.md", "newMarkdown": "New Markdown Document",
+			"saveAsMarkdown": "Save Markdown Document As", "newDocument": "New document.md", "newMarkdown": "New Markdown Document", "portableMarkdown": "Portable Markdown (*.md)",
 			"selectImage": "Choose an image to insert", "imageFile": "Image files", "exportWord": "Export Word Document", "wordDocument": "Word Document", "exportHTML": "Export HTML Page", "htmlDocument": "HTML Page",
 			"exportDocument": "Export Document", "exportPDF": "Export PDF", "selectPandoc": "Select Pandoc Executable", "pandocExecutable": "Pandoc Executable", "exportImage": "Export Long Image", "pngImage": "PNG Image", "jpegImage": "JPEG Image",
 		},

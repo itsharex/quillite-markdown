@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestStandaloneImageLayoutsUseStrictStyleWhitelist(t *testing.T) {
+	fragment := `<table class="quillite-image-row" style="position:fixed;background:url(https://bad)"><tbody><tr><td style="width:50%;font-family:evil"><img src="data:image/png;base64,AAAA" style="display:block;margin-left:0;margin-right:auto;position:fixed;background:url(https://bad)"></td><td style="width:50%"><img src="data:image/png;base64,AAAA" style="display:block;margin-left:auto;margin-right:0"></td></tr></tbody></table><img src="data:image/png;base64,AAAA" style="display:block;margin-left:auto;margin-right:auto"><p style="margin-left:auto;display:block">正文</p>`
+	result, err := sanitizeStandaloneHTML(fragment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"margin-left:0;margin-right:auto", "margin-left:auto;margin-right:0", "margin-left:auto;margin-right:auto", "width:50%", "table-layout:fixed", "vertical-align:top", "<p>正文</p>"} {
+		if !strings.Contains(result, required) {
+			t.Fatalf("missing %q: %s", required, result)
+		}
+	}
+	for _, unsafe := range []string{"position", "url(", "font-family"} {
+		if strings.Contains(result, unsafe) {
+			t.Fatalf("unsafe style %q survived", unsafe)
+		}
+	}
+	for _, invalid := range []string{"0%", "101%", "NaN%", "-1%", "50%;color:red"} {
+		if safeImageRowPercent(invalid) {
+			t.Fatalf("unsafe width %q", invalid)
+		}
+	}
+}
+
 func TestBuildStandaloneHTMLPreservesDocumentAndAppearance(t *testing.T) {
 	data, err := buildStandaloneHTML(`<h1>公式与代码</h1><p><span class="math-inline"><math><mi>x</mi><mo>=</mo><mn>1</mn></math></span></p><pre><code class="language-go">fmt.Println(&quot;ok&quot;)</code></pre>`, `示例 & 文档`, "zh-CN", "dark", "#075DF3")
 	if err != nil {

@@ -16,6 +16,8 @@ export function CheckDocumentAssets(arg1:string,arg2:Array<string>):Promise<Arra
 
 export function CheckForUpdates(arg1:boolean):Promise<main.UpdateInfo>;
 
+export function ChooseDocumentSavePath(arg1:string):Promise<string>;
+
 export function ClearRecoverySnapshot():Promise<void>;
 
 export function DetectPandoc():Promise<main.PandocStatus>;
@@ -37,6 +39,8 @@ export function ExportHTML(arg1:string,arg2:string,arg3:string,arg4:string,arg5:
 export function ExportPDF(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
 
 export function ExportPlainHTML(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
+
+export function ExportPortableMarkdown(arg1:string,arg2:string):Promise<string>;
 
 export function ExportWithPandoc(arg1:main.PandocExportInput):Promise<string>;
 
@@ -102,9 +106,13 @@ export function ReadFile(arg1:string):Promise<main.Document>;
 
 export function ReadImageData(arg1:string,arg2:string):Promise<string>;
 
+export function ReadPortableImage(arg1:string,arg2:string):Promise<string>;
+
 export function RemoveFavorite(arg1:string):Promise<main.Preferences>;
 
 export function RemoveRecent(arg1:string):Promise<main.Preferences>;
+
+export function RenameDocument(arg1:string,arg2:string,arg3:string):Promise<main.Document>;
 
 export function ReorderPinnedRecent(arg1:Array<string>):Promise<main.Preferences>;
 
@@ -121,6 +129,8 @@ export function SaveAs(arg1:string,arg2:string):Promise<main.Document>;
 export function SaveConflictCopy(arg1:string,arg2:string):Promise<main.Document>;
 
 export function SaveDiagnosticReport(arg1:main.DiagnosticInput):Promise<string>;
+
+export function SaveDocumentCopy(arg1:string,arg2:string,arg3:string):Promise<main.Document>;
 
 export function SaveExportImage(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
@@ -145,6 +155,8 @@ export function SelectImage(arg1:string):Promise<string>;
 export function SelectPandoc():Promise<main.PandocStatus>;
 
 export function SetAISettings(arg1:main.AISettingsInput):Promise<main.AISettings>;
+
+export function SetBodyTypography(arg1:main.BodyTypography):Promise<main.BodyTypography>;
 
 export function SetDefaultAIProvider(arg1:string,arg2:string):Promise<main.AISettings>;
 
